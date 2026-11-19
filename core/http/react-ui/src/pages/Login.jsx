@@ -6,6 +6,7 @@ import { useBranding } from '../contexts/BrandingContext'
 import { apiUrl } from '../utils/basePath'
 import './login.css'
 import Icon from '../components/Icon'
+import BrandName from '../components/BrandName'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -14,6 +15,8 @@ export default function Login() {
   const [searchParams] = useSearchParams()
   const { authEnabled, staticApiKeyRequired, user, loading: authLoading, refresh } = useAuth()
   const branding = useBranding()
+
+  const [logoFailed, setLogoFailed] = useState(false)
 
   const [providers, setProviders] = useState([])
   const [hasUsers, setHasUsers] = useState(true)
@@ -34,6 +37,10 @@ export default function Login() {
   const [weakPasswordWarning, setWeakPasswordWarning] = useState('')
   const [acknowledgeWeakPassword, setAcknowledgeWeakPassword] = useState(false)
   const [token, setToken] = useState('')
+
+  useEffect(() => {
+    setLogoFailed(false)
+  }, [branding.logoUrl])
 
   const extractError = (data, fallback) => {
     if (!data) return fallback
@@ -226,10 +233,19 @@ export default function Login() {
       <main className="lg-main">
         <header className="lg-hero">
           <div className="lg-hero__brand" aria-label={branding.instanceName || 'LocalAI'}>
-            <span className="lg-hero__mark" aria-hidden="true">
-             <img src={apiUrl(branding.logoUrl)} alt="" className="lg-brand__logo" />
+            {branding.logoUrl && !logoFailed ? (
+              <img
+                src={apiUrl(branding.logoUrl)}
+                alt=""
+                className="lg-hero__logo"
+                onError={() => setLogoFailed(true)}
+              />
+            ) : (
+              <span className="lg-hero__mark" aria-hidden="true">AI</span>
+            )}
+            <span className="lg-hero__brand-name">
+              <BrandName />
             </span>
-            <span className="lg-hero__brand-name">{branding.instanceName || 'LocalAI'}</span>
           </div>
           <h1 className="lg-hero__title">বাংলায় AI LLM MCP সব একসাথে</h1>
           <p className="lg-hero__subtitle">বাংলা ভাষায় AI প্রযুক্তির জগতে আপনাকে স্বাগতম!</p>
