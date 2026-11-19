@@ -227,7 +227,7 @@ export default function Login() {
         <header className="lg-hero">
           <div className="lg-hero__brand" aria-label={branding.instanceName || 'LocalAI'}>
             <span className="lg-hero__mark" aria-hidden="true">
-              <Icon name="brain-circuit" />
+             <img src={apiUrl(branding.logoUrl)} alt="" className="lg-brand__logo" />
             </span>
             <span className="lg-hero__brand-name">{branding.instanceName || 'LocalAI'}</span>
           </div>
