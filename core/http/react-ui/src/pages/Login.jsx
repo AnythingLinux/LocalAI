@@ -235,7 +235,7 @@ export default function Login() {
           <div className="lg-hero__brand" aria-label={branding.instanceName || 'LocalAI'}>
             {branding.logoUrl && !logoFailed ? (
               <img
-                src={apiUrl(branding.logoUrl)}
+                src={apiUrl('/app/logo.png')}
                 alt=""
                 className="lg-hero__logo"
                 onError={() => setLogoFailed(true)}
