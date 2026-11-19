@@ -454,3 +454,15 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+.lg-hero__mark {
+  flex: none;
+  overflow: hidden;
+}
+
+.lg-brand__logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
