@@ -1,5 +1,9 @@
 /* ==========================================================================
    Sign-in, registration and the invite page
+
+   One screen: a brand panel with the instance's name and tagline, and
+   one form beside it with one field per step. Built on the kit's field, input
+   and button classes. The page has no gradient, no glass and no coloured edge.
    ========================================================================== */
 
 .lg { --dk-font-display: var(--font-sans); --dk-font-body: var(--font-sans); min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); background: var(--dk-canvas); color: var(--dk-text); }
@@ -30,8 +34,8 @@
 .lg-alert { display: flex; align-items: flex-start; gap: var(--dk-space-3); margin: 0; padding: var(--dk-space-3) var(--dk-space-4); border: 1px solid var(--dk-edge); border-radius: var(--dk-radius-2); background: var(--dk-card); font-size: var(--dk-text-13); line-height: 1.5; }
 .lg-alert p { margin: 0; flex: 1; min-width: 0; }
 .lg-alert .lai-icon { flex: none; margin-top: 2px; font-size: 16px; }
-.lg-alert[data-tone=\"error\"] { background: var(--dk-error-wash); border-color: transparent; color: var(--dk-error-text); }
-.lg-alert[data-tone=\"warn\"] { flex-direction: column; background: var(--dk-warn-wash); border-color: transparent; color: var(--dk-warn-text); }
+.lg-alert[data-tone="error"] { background: var(--dk-error-wash); border-color: transparent; color: var(--dk-error-text); }
+.lg-alert[data-tone="warn"] { flex-direction: column; background: var(--dk-warn-wash); border-color: transparent; color: var(--dk-warn-text); }
 .lg-token { display: flex; flex-direction: column; gap: var(--dk-space-3); margin-top: var(--dk-space-2); }
 .lg-token__form { display: flex; flex-direction: column; gap: var(--dk-space-3); }
 

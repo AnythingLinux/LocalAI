@@ -192,6 +192,7 @@ export default function Login() {
 
   if (authLoading || statusLoading) return null
 
+  // Brand panel: instance name and tagline only (no logo badge).
   const Brand = (
     <aside className="lg-brand" aria-label={branding.instanceName}>
       <div className="lg-brand__top">
@@ -399,5 +400,3 @@ export default function Login() {
     </div>
   )
 }
-
-
