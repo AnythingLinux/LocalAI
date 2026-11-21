@@ -1268,14 +1268,9 @@ export const failoverApi = {
 }
 
 // Nodes API (distributed)
-// Admin API of the cluster transport (the active carrier and its settings).
-// `switchCarrier` answers 202 with the new row, 422 with `blockers` in the body
-// when the preflight refuses, and 409 when a change is already under way.
+// Admin API of the cluster settings. A read also carries the broadcast bus of
+// the frontend that answers and the live frontends.
 export const clusterApi = {
-  carrier: () => fetchJSON(API_CONFIG.endpoints.clusterCarrier),
-  dryRun: (target) => postJSON(API_CONFIG.endpoints.clusterCarrier, { target, dry_run: true }),
-  switchCarrier: (target, force = false) => postJSON(API_CONFIG.endpoints.clusterCarrier, { target, force }),
-  abort: () => postJSON(API_CONFIG.endpoints.clusterCarrier, { abort: true }),
   settings: () => fetchJSON(API_CONFIG.endpoints.clusterSettings),
   saveSettings: (settings) => fetchJSON(API_CONFIG.endpoints.clusterSettings, {
     method: 'PUT',

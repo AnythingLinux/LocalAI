@@ -345,7 +345,7 @@ The token-based P2P mode, federation and the Explorer were removed. A server tha
 | Command | What it does |
 |---------|--------------|
 | `local-ai library list` | List every source with its kind, id, URL, and whether it is enabled, a shipped default, or removed |
-| `local-ai library add <url> --kind addon\|backend\|model [--id ID] [--name NAME] [--format library\|gallery]` | Add a source of your own |
+| `local-ai library add <url> --kind addon\|backend\|model [--id ID] [--name NAME] [--format library\|gallery] [--issuer ISSUER --identity IDENTITY]` | Add a source of your own. `--issuer` and `--identity` go together and apply to an `oci://` add-on library: its artifact must be signed by that issuer and exact identity |
 | `local-ai library remove <id>` | Remove a source. A removed default leaves a tombstone, so it does not come back at the next start |
 | `local-ai library enable <id>` | Turn a source on. This also brings back a removed default |
 | `local-ai library disable <id>` | Turn a source off without removing it |
@@ -369,7 +369,7 @@ LocalAI supports several subcommands beyond `run`:
 - `local-ai transcript` - Convert audio to text
 - `local-ai mcp-server` - Run the LocalAI admin and client tool surface as a stdio MCP server (controls a remote LocalAI instance over HTTP). `--files-dir` (`LOCALAI_MCP_FILES_DIR`) is the folder where the client tools read and write files; it has no default, and without it the client tools that read or write files are not registered. `--read-only` also leaves out the client tools that write files or make content (`generate_*`, `speak`, `embed`, `voice_profile` create and delete)
 - `local-ai worker` - Start a worker. With no subcommand it is the worker for distributed mode (generic, backend-agnostic). The subcommands `llama-cpp-rpc`, `mlx-distributed`, `vllm` and `ds4-distributed` run the standalone workers; `llama-cpp-rpc` and `mlx-distributed` also join a server over P2P with `--join <invite link>` (see [Model-split workers over P2P]({{% relref "/administration/p2p-model-split" %}})). `p2p-worker` is the old name of this command and still works
-- `local-ai cluster` - Read or change the carrier (NATS or the database tunnel) and the settings of a distributed cluster through a running frontend. See [Distributed Mode]({{% relref "/administration/distributed-mode" %}})
+- `local-ai cluster` - Read or change the broadcast bus between the frontends (`nats` for NATS, `tunnel` for PostgreSQL with WebSocket workers) and the settings of a distributed cluster through a running frontend. Workers never connect to PostgreSQL. Changing the bus is an advanced operation. See [Distributed Mode]({{% relref "/administration/distributed-mode" %}})
 - `local-ai p2p` - Run a relay, manage relays and pair devices over P2P
 - `local-ai agent-worker` - Start a worker for distributed mode (serves MCP tool calls via NATS)
 - `local-ai util` - Utility commands

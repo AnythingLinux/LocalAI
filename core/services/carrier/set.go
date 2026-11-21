@@ -1,25 +1,33 @@
-// Package carrier makes the transport of a distributed deployment replaceable
-// at runtime.
+// Package carrier holds the transports of a distributed deployment behind the
+// seams that cross a process boundary.
 //
-// Every seam that crosses a process boundary (fan-out, control verbs,
-// file staging, backend dials, agent RPC) is an interface. A Set is one
-// carrier's implementation of all of them. The holders in this package
-// implement the same interfaces and forward each call to the Set that an
-// atomic pointer names at that moment, so code that was built against an
-// interface keeps working while the pointer moves.
+// Every seam (fan-out, control verbs, file staging, backend dials, agent RPC)
+// is an interface. The members split along two axes:
 //
-// This package names interfaces only. The code that builds a Set for a
-// carrier is the one place that names the carrier (see nats.go).
+//   - A WorkerRoute is one way to reach a worker: the control verbs, the file
+//     stager, the gRPC client factory, the dialer of the HTTP server of the
+//     worker and the agent RPC. A frontend may hold several, one for each kind
+//     of route (nodes.RouteKind), and the RouteTable picks one for each node
+//     from the routes that the node has (nodes.RoutesOf).
+//   - The broadcaster holder (Broadcaster) is what the frontends and chat
+//     workers broadcast on: it listens on every bus they have (PostgreSQL, and
+//     NATS when configured) and publishes each message on one of them.
+//   - Request and reply between the frontends and chat workers go over the peer
+//     link (NewPeerReplies), on every deployment.
+//
+// The holders in this package implement the seam interfaces. The holders of the
+// worker-facing seams forward each call through the route table; the
+// broadcaster holder picks a bus for each publish.
+//
+// This package names interfaces only. The code that builds the routes is the
+// one place that names a transport (see nats.go and tunnel.go).
 package carrier
 
 import (
 	"errors"
 	"fmt"
-	"sync/atomic"
 
 	mcpTools "github.com/mudler/LocalAI/core/http/endpoints/mcp"
-	"github.com/mudler/LocalAI/core/services/cluster"
-	"github.com/mudler/LocalAI/core/services/messaging"
 	"github.com/mudler/LocalAI/core/services/nodes"
 )
 
@@ -31,75 +39,46 @@ type FileCarrier interface {
 	nodes.RequestFileReleaser
 }
 
-// Set is the implementation of every seam for one carrier. Build it completely
-// and call Validate before storing it where holders can see it.
-type Set struct {
-	// Name is the carrier this set belongs to.
-	Name cluster.Carrier
-	// Epoch is the epoch of the cluster row the set was built for.
-	Epoch int64
-	// NATSURL is the address of the NATS server that a NATS set was built from,
-	// as the row of the cluster named it. A set that was built from another
-	// address is not the set that the row asks for. Empty for the tunnel.
-	NATSURL string
+// WorkerRoute is the implementation of the worker-facing seams for one kind of
+// route. The RouteTable holds one for each kind and picks one for each node.
+type WorkerRoute struct {
+	// Kind is the kind of route that this implements.
+	Kind     nodes.RouteKind
+	Commands nodes.NodeControl
+	Files    FileCarrier
+	Clients  nodes.BackendClientFactory
+	Dialer   nodes.WorkerNetDialerFor
+	// Agents carries the MCP requests to an agent worker. It is nil for a route
+	// that has no agent RPC, and the agent holder then asks the next route.
+	Agents mcpTools.AgentControl
 
-	// Broadcaster carries fan-out and nothing else. A subject outside the
-	// broadcast roots (see messaging.ValidateBroadcastSubject) is not served
-	// through it: control traffic uses Commands, Clients and Agents.
-	Broadcaster messaging.Broadcaster
-	// OnReconnect registers a callback the carrier runs after it recovers a
-	// lost connection. It is nil for a carrier with no such event.
-	OnReconnect func(func())
-	Commands    nodes.NodeControl
-	Files       FileCarrier
-	Clients     nodes.BackendClientFactory
-	Dialer      nodes.WorkerNetDialerFor
-	Agents      mcpTools.AgentControl
-	// Replies carries request and reply between the processes of the cluster:
-	// the chat start, the replay of chat events and the background jobs of a
-	// turn. It is nil for a carrier that has none, and the holder then answers
-	// every request with messaging.ErrNotDelivered. That is not "nobody
-	// listens": the callers handle it as a request that reached no process.
-	Replies messaging.RequestReply
-
-	// ForgetNode drops what the set caches for a node that left or lost its
+	// ForgetNode drops what the route caches for a node that left or lost its
 	// right to a connection, and closes the idle streams that it holds. It may
-	// be nil for a carrier that caches nothing per node.
+	// be nil for a route that caches nothing per node.
 	ForgetNode func(nodeID string)
-
-	// Close releases the carrier's connections. It may be nil.
+	// Close releases the connections of the route. It may be nil.
 	Close func()
-
-	// The fan-out holder (Broadcaster) keeps these. publishing counts the
-	// publishes that run on the set, and released says that the holder dropped
-	// the subscriptions of the set. Release waits for the count to reach zero, so
-	// a publish that started on the set reaches its subscribers. A set belongs to
-	// one holder.
-	publishing atomic.Int64
-	released   atomic.Bool
 }
 
 // Validate reports the first member that is missing.
-func (s *Set) Validate() error {
-	if s == nil {
-		return errors.New("carrier set is nil")
+func (r *WorkerRoute) Validate() error {
+	if r == nil {
+		return errors.New("worker route is nil")
 	}
-	if s.Name != cluster.CarrierNATS && s.Name != cluster.CarrierTunnel {
-		return fmt.Errorf("%w: %q", cluster.ErrInvalidCarrier, s.Name)
+	if r.Kind != nodes.RouteDirect && r.Kind != nodes.RouteTunnel {
+		return fmt.Errorf("worker route has an unknown kind %q", r.Kind)
 	}
 	for _, m := range []struct {
 		name string
 		ok   bool
 	}{
-		{"Broadcaster", s.Broadcaster != nil},
-		{"Commands", s.Commands != nil},
-		{"Files", s.Files != nil},
-		{"Clients", s.Clients != nil},
-		{"Dialer", s.Dialer != nil},
-		{"Agents", s.Agents != nil},
+		{"Commands", r.Commands != nil},
+		{"Files", r.Files != nil},
+		{"Clients", r.Clients != nil},
+		{"Dialer", r.Dialer != nil},
 	} {
 		if !m.ok {
-			return fmt.Errorf("carrier set %q has no %s", s.Name, m.name)
+			return fmt.Errorf("%s worker route has no %s", r.Kind, m.name)
 		}
 	}
 	return nil

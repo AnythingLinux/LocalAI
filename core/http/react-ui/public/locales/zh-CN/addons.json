@@ -649,7 +649,9 @@
     },
     "waitingService": "插件服务正在启动。LocalAI 将在 {{seconds}} 秒后再次查询更新状态。",
     "checkAgain": "立即检查",
-    "open": "打开更新"
+    "open": "打开更新",
+    "cancelledNote": "{{name}} 的更新已取消。版本 {{version}} 继续运行。",
+    "cancelling": "正在取消…"
   },
   "install": {
     "stepsLabel": "Install steps",
@@ -724,7 +726,8 @@
     "skillShadow": "此插件会替换内置技能 {{skill}}。",
     "skillShadowWarning": "此插件会替换内置技能 {{skill}}。另一个插件（{{name}}）已经替换了它。只能有一个生效；你可以在 设置 > 工具 中选择。 在你选择之前，由最先安装的插件提供。",
     "skillProvides": "此插件提供 {{skill}} 技能。",
-    "skillProvidesWarning": "此插件提供 {{skill}} 技能。另一个插件（{{name}}）也提供此技能。只能启用一个；请在设置 > 工具中选择。如果未选择，则使用最先安装的插件。"
+    "skillProvidesWarning": "此插件提供 {{skill}} 技能。另一个插件（{{name}}）也提供此技能。只能启用一个；请在设置 > 工具中选择。如果未选择，则使用最先安装的插件。",
+    "background": "此操作在后台运行。您可以关闭此窗口，关闭不会停止它。"
   },
   "family": {
     "pages": "在找你或智能体创建的页面?它们在<go>页面</go>中。"
@@ -792,7 +795,8 @@
       "action": "批准并更新",
       "body": "{{name}} 的 {{current}} 版本继续运行。批准后，新版本可以运行这些操作。新增项已标出。",
       "done": "{{name}} 已更新。",
-      "title": "批准 {{name}} {{version}} 的主机访问"
+      "title": "批准 {{name}} {{version}} 的主机访问",
+      "running": "更新在后台运行。您可以关闭此窗口，关闭不会停止它。选择“取消”可停止。"
     },
     "asksNothing": "此插件不请求主机访问。",
     "blanket": {
@@ -896,6 +900,7 @@
     "newOptional": "新版本还请求 {{ops}}。这些是可选的，且未被允许。",
     "noLongerRequested": "此版本不再请求它。你可以将其关闭。",
     "notOfficialWarning": "此插件来自 {{library}}，不是官方库。它在此服务器上作为受信任的代码运行，并可以使用交给它的凭据。只有在你信任其作者时才安装。",
+    "signedNotReviewed": "由 {{signer}} 签名。未经 LocalAI 审核。它在此服务器上作为受信任代码运行，可以使用授予它的凭据。仅在你信任签名者时安装。",
     "op": {
       "alreadyAllowed": "已允许",
       "blocked": "被管理员策略禁止",
@@ -929,7 +934,12 @@
       "body": "新版本请求当前版本没有的主机访问。批准之前，{{current}} 版本继续运行。新增的操作数：{{count}}。",
       "review": "查看并批准",
       "reviewNamed": "查看并批准 {{name}} 的主机访问",
-      "title": "{{name}} {{version}} 等待你的批准"
+      "title": "{{name}} {{version}} 等待你的批准",
+      "updatingTitle": "正在将 {{name}} 更新到 {{version}}",
+      "queuedBody": "已在队列中，将在后台运行。",
+      "cancellingTitle": "正在取消 {{name}} 的更新",
+      "failedTitle": "将 {{name}} 更新到 {{version}} 失败",
+      "reviewAgain": "重新查看"
     }
   },
   "oauthClient": {
@@ -1013,7 +1023,10 @@
       "downgradeTitle": "较旧的版本",
       "downgrade": "这会安装 {{version}} 版本，它比已安装的 {{installed}} 版本更旧。较旧的版本可能无法读取较新版本写入的数据。",
       "downgradeConfirm": "我要安装较旧的版本"
-    }
+    },
+    "progress": "正在从文件安装 {{name}}。它在后台运行。",
+    "failedTitle": "从文件安装 {{name}} 失败",
+    "failedHint": "文件会保留一小时。选择“重试”即可再次使用它。"
   },
   "notice": {
     "enableFailedTitle": "无法打开 {{name}}",

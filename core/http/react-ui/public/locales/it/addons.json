@@ -649,7 +649,9 @@
     },
     "waitingService": "Il servizio dei componenti aggiuntivi si sta avviando. LocalAI chiede di nuovo dell'aggiornamento tra {{seconds}} s.",
     "checkAgain": "Controlla ora",
-    "open": "Apri Aggiornamenti"
+    "open": "Apri Aggiornamenti",
+    "cancelledNote": "L’aggiornamento di {{name}} è stato annullato. La versione {{version}} continua a funzionare.",
+    "cancelling": "Annullamento…"
   },
   "install": {
     "stepsLabel": "Install steps",
@@ -724,7 +726,8 @@
     "skillShadow": "Questo componente sostituisce la skill integrata {{skill}}.",
     "skillShadowWarning": "Questo componente sostituisce la skill integrata {{skill}}. Un altro componente ({{name}}) lo fa già. Solo uno può essere attivo; scegli quale in Impostazioni > Strumenti. Finché non scegli, lo fornisce quello installato per primo.",
     "skillProvides": "Questo componente aggiuntivo fornisce la competenza {{skill}}.",
-    "skillProvidesWarning": "Questo componente aggiuntivo fornisce la competenza {{skill}}. Anche un altro componente aggiuntivo ({{name}}) la fornisce. Solo uno può essere attivo; scegli in Impostazioni > Strumenti. Senza una scelta, viene usato quello installato per primo."
+    "skillProvidesWarning": "Questo componente aggiuntivo fornisce la competenza {{skill}}. Anche un altro componente aggiuntivo ({{name}}) la fornisce. Solo uno può essere attivo; scegli in Impostazioni > Strumenti. Senza una scelta, viene usato quello installato per primo.",
+    "background": "Va avanti in background. Puoi chiudere questa finestra; chiuderla non lo ferma."
   },
   "family": {
     "pages": "Cerchi le pagine create da te o da un agente? Sono in <go>Pagine</go>."
@@ -792,7 +795,8 @@
       "action": "Approva e aggiorna",
       "body": "La versione {{current}} di {{name}} continua a funzionare. Se approvi, la nuova versione può eseguire queste azioni. Le nuove sono segnate.",
       "done": "{{name}} è stato aggiornato.",
-      "title": "Approva l'accesso all'host per {{name}} {{version}}"
+      "title": "Approva l'accesso all'host per {{name}} {{version}}",
+      "running": "L'aggiornamento va avanti in background. Puoi chiudere questa finestra; chiuderla non lo ferma. Scegli Annulla per fermarlo."
     },
     "asksNothing": "Questo add-on non chiede accesso all'host.",
     "blanket": {
@@ -896,6 +900,7 @@
     "newOptional": "La nuova versione chiede anche {{ops}}. Sono facoltative e non consentite.",
     "noLongerRequested": "Questa versione non lo chiede più. Puoi spegnerlo.",
     "notOfficialWarning": "Questo add-on viene da {{library}}, non dalla libreria ufficiale. Gira come codice fidato su questo server e può usare le credenziali che gli vengono date. Installalo solo se ti fidi di chi lo ha scritto.",
+    "signedNotReviewed": "Firmato da {{signer}}. Non verificato da LocalAI. Gira come codice fidato su questo server e può usare le credenziali che riceve. Installalo solo se ti fidi di chi lo ha firmato.",
     "op": {
       "alreadyAllowed": "Già consentito",
       "blocked": "Bloccato dalla politica dell'amministratore",
@@ -929,7 +934,12 @@
       "body": "La nuova versione chiede un accesso all'host che quella attuale non ha. La versione {{current}} continua a funzionare finché non approvi. Operazioni aggiunte: {{count}}.",
       "review": "Controlla e approva",
       "reviewNamed": "Controlla e approva l'accesso all'host di {{name}}",
-      "title": "{{name}} {{version}} aspetta la tua approvazione"
+      "title": "{{name}} {{version}} aspetta la tua approvazione",
+      "updatingTitle": "Aggiornamento di {{name}} alla {{version}}",
+      "queuedBody": "È in coda e va avanti in background.",
+      "cancellingTitle": "Annullamento dell'aggiornamento di {{name}}",
+      "failedTitle": "L'aggiornamento di {{name}} alla {{version}} non è riuscito",
+      "reviewAgain": "Controlla di nuovo"
     }
   },
   "oauthClient": {
@@ -1013,7 +1023,10 @@
       "downgradeTitle": "Versione precedente",
       "downgrade": "Questo installa la versione {{version}}, più vecchia della versione installata {{installed}}. Una versione più vecchia può non leggere i dati scritti da una più nuova.",
       "downgradeConfirm": "Voglio installare la versione precedente"
-    }
+    },
+    "progress": "Installazione di {{name}} da un file. Va avanti in background.",
+    "failedTitle": "Installazione di {{name}} da un file non riuscita",
+    "failedHint": "Il file resta per un’ora. Scegli Riprova per usarlo di nuovo."
   },
   "notice": {
     "enableFailedTitle": "Impossibile attivare {{name}}",

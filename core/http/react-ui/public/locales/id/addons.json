@@ -649,7 +649,9 @@
     },
     "waitingService": "Layanan add-on sedang dimulai. LocalAI menanyakan pembaruan lagi dalam {{seconds}} dtk.",
     "checkAgain": "Periksa sekarang",
-    "open": "Buka Pembaruan"
+    "open": "Buka Pembaruan",
+    "cancelledNote": "Pembaruan {{name}} dibatalkan. Versi {{version}} tetap berjalan.",
+    "cancelling": "Membatalkan…"
   },
   "install": {
     "stepsLabel": "Install steps",
@@ -724,7 +726,8 @@
     "skillShadow": "Add-on ini menggantikan skill bawaan {{skill}}.",
     "skillShadowWarning": "Add-on ini menggantikan skill bawaan {{skill}}. Add-on lain ({{name}}) sudah melakukannya. Hanya satu yang bisa aktif; Anda memilih yang mana di Pengaturan > Alat. Sebelum Anda memilih, yang dipasang lebih dulu yang melayaninya.",
     "skillProvides": "Add-on ini menyediakan keterampilan {{skill}}.",
-    "skillProvidesWarning": "Add-on ini menyediakan keterampilan {{skill}}. Add-on lain ({{name}}) juga menyediakannya. Hanya satu yang dapat aktif; pilih di Pengaturan > Alat. Tanpa pilihan, yang dipasang lebih dahulu akan digunakan."
+    "skillProvidesWarning": "Add-on ini menyediakan keterampilan {{skill}}. Add-on lain ({{name}}) juga menyediakannya. Hanya satu yang dapat aktif; pilih di Pengaturan > Alat. Tanpa pilihan, yang dipasang lebih dahulu akan digunakan.",
+    "background": "Ini berjalan di latar belakang. Anda dapat menutup jendela ini; menutupnya tidak menghentikannya."
   },
   "family": {
     "pages": "Mencari halaman yang Anda atau agen buat? Ada di <go>Halaman</go>."
@@ -792,7 +795,8 @@
       "action": "Setujui dan perbarui",
       "body": "Versi {{current}} dari {{name}} tetap berjalan. Jika Anda setuju, versi baru dapat menjalankan aksi ini. Yang baru ditandai.",
       "done": "{{name}} telah diperbarui.",
-      "title": "Setujui akses host untuk {{name}} {{version}}"
+      "title": "Setujui akses host untuk {{name}} {{version}}",
+      "running": "Pembaruan berjalan di latar belakang. Anda dapat menutup jendela ini; menutupnya tidak menghentikan pembaruan. Pilih Batal untuk menghentikannya."
     },
     "asksNothing": "Add-on ini tidak meminta akses host.",
     "blanket": {
@@ -896,6 +900,7 @@
     "newOptional": "Versi baru juga meminta {{ops}}. Ini opsional dan tidak diizinkan.",
     "noLongerRequested": "Versi ini tidak lagi memintanya. Anda dapat mematikannya.",
     "notOfficialWarning": "Add-on ini berasal dari {{library}}, bukan pustaka resmi. Add-on berjalan sebagai kode tepercaya di server ini dan dapat memakai kredensial yang diberikan kepadanya. Pasang hanya jika Anda memercayai penulisnya.",
+    "signedNotReviewed": "Ditandatangani oleh {{signer}}. Tidak ditinjau oleh LocalAI. Add-on berjalan sebagai kode tepercaya di server ini dan dapat memakai kredensial yang diberikan. Pasang hanya jika Anda memercayai penandatangannya.",
     "op": {
       "alreadyAllowed": "Sudah diizinkan",
       "blocked": "Diblokir oleh kebijakan administrator",
@@ -929,7 +934,12 @@
       "body": "Versi baru meminta akses host yang tidak dimiliki versi sekarang. Versi {{current}} tetap berjalan sampai Anda menyetujui. Operasi yang ditambahkan: {{count}}.",
       "review": "Tinjau dan setujui",
       "reviewNamed": "Tinjau dan setujui akses host {{name}}",
-      "title": "{{name}} {{version}} menunggu persetujuan Anda"
+      "title": "{{name}} {{version}} menunggu persetujuan Anda",
+      "updatingTitle": "Memperbarui {{name}} ke {{version}}",
+      "queuedBody": "Pembaruan ada dalam antrean dan berjalan di latar belakang.",
+      "cancellingTitle": "Membatalkan pembaruan {{name}}",
+      "failedTitle": "Pembaruan {{name}} ke {{version}} gagal",
+      "reviewAgain": "Tinjau lagi"
     }
   },
   "oauthClient": {
@@ -1013,7 +1023,10 @@
       "downgradeTitle": "Versi lebih lama",
       "downgrade": "Ini memasang versi {{version}}, yang lebih lama daripada versi terpasang {{installed}}. Versi yang lebih lama mungkin tidak bisa membaca data yang ditulis versi yang lebih baru.",
       "downgradeConfirm": "Saya ingin memasang versi yang lebih lama"
-    }
+    },
+    "progress": "Memasang {{name}} dari berkas. Proses berjalan di latar belakang.",
+    "failedTitle": "Pemasangan {{name}} dari berkas gagal",
+    "failedHint": "Berkas disimpan satu jam. Pilih Coba lagi untuk memakainya sekali lagi."
   },
   "notice": {
     "enableFailedTitle": "{{name}} tidak dapat diaktifkan",

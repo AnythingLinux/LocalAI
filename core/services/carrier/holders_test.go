@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mudler/LocalAI/core/services/carrier"
-	"github.com/mudler/LocalAI/core/services/cluster"
 	mcpRemote "github.com/mudler/LocalAI/core/services/mcp"
 	"github.com/mudler/LocalAI/core/services/nodes"
 	"github.com/mudler/LocalAI/core/services/workerctl"
@@ -23,43 +22,62 @@ type callCase[H any] struct {
 	call   func(H)
 }
 
-var _ = Describe("Set", func() {
-	It("accepts a complete set", func() {
-		Expect(newFakeCarrier(cluster.CarrierNATS, 1).set.Validate()).To(Succeed())
+var _ = Describe("WorkerRoute", func() {
+	It("accepts a complete route", func() {
+		Expect(newFakeCarrier(nodes.RouteDirect).set.Validate()).To(Succeed())
 	})
 
 	It("names the first member that is missing", func() {
-		for name, mutate := range map[string]func(*carrier.Set){
-			"Broadcaster": func(s *carrier.Set) { s.Broadcaster = nil },
-			"Commands":    func(s *carrier.Set) { s.Commands = nil },
-			"Files":       func(s *carrier.Set) { s.Files = nil },
-			"Clients":     func(s *carrier.Set) { s.Clients = nil },
-			"Dialer":      func(s *carrier.Set) { s.Dialer = nil },
-			"Agents":      func(s *carrier.Set) { s.Agents = nil },
+		for name, mutate := range map[string]func(*carrier.WorkerRoute){
+			"Commands": func(r *carrier.WorkerRoute) { r.Commands = nil },
+			"Files":    func(r *carrier.WorkerRoute) { r.Files = nil },
+			"Clients":  func(r *carrier.WorkerRoute) { r.Clients = nil },
+			"Dialer":   func(r *carrier.WorkerRoute) { r.Dialer = nil },
 		} {
-			s := newFakeCarrier(cluster.CarrierNATS, 1).set
-			mutate(s)
-			Expect(s.Validate()).To(MatchError(ContainSubstring(name)), name)
+			r := newFakeCarrier(nodes.RouteDirect).set
+			mutate(r)
+			Expect(r.Validate()).To(MatchError(ContainSubstring(name)), name)
 		}
 	})
 
-	It("refuses a carrier name the cluster does not know", func() {
-		s := newFakeCarrier("carrier-pigeon", 1).set
-		Expect(s.Validate()).To(MatchError(cluster.ErrInvalidCarrier))
+	It("accepts a route with no agent RPC", func() {
+		r := newFakeCarrier(nodes.RouteTunnel).set
+		r.Agents = nil
+		Expect(r.Validate()).To(Succeed())
+	})
+
+	It("refuses a route of a kind the table does not know", func() {
+		r := newFakeCarrier(nodes.RouteDirect).route()
+		r.Kind = "pigeon"
+		Expect(r.Validate()).To(MatchError(ContainSubstring("unknown kind")))
+		Expect((*carrier.WorkerRoute)(nil).Validate()).To(HaveOccurred())
 	})
 })
 
 var _ = Describe("Forwarding holders", func() {
 	var (
-		a, b *fakeCarrier
-		cur  atomic.Pointer[carrier.Set]
+		a, b  *fakeCarrier
+		cur   *carrier.RouteTable
+		onlyB atomic.Bool
 	)
 
+	// moveToB leaves b as the only route of every node, as when a worker loses
+	// its NATS route.
+	moveToB := func() {
+		onlyB.Store(true)
+		cur.DropCache()
+	}
+
 	BeforeEach(func() {
-		a = newFakeCarrier(cluster.CarrierNATS, 1)
-		b = newFakeCarrier(cluster.CarrierTunnel, 2)
-		cur = atomic.Pointer[carrier.Set]{}
-		cur.Store(a.set)
+		a = newFakeCarrier(nodes.RouteDirect)
+		b = newFakeCarrier(nodes.RouteTunnel)
+		onlyB.Store(false)
+		cur = tableFrom(func(context.Context, string) ([]nodes.Route, error) {
+			if onlyB.Load() {
+				return []nodes.Route{{Kind: nodes.RouteTunnel}}, nil
+			}
+			return []nodes.Route{{Kind: nodes.RouteDirect}, {Kind: nodes.RouteTunnel}}, nil
+		}, a, b)
 	})
 
 	ctx := context.Background()
@@ -70,7 +88,7 @@ var _ = Describe("Forwarding holders", func() {
 		It("passes the environment snapshot of an install on to the carrier", func() {
 			var got []map[string]string
 			a.set.Commands = &envCommands{fakeCommands: a.commands, got: &got}
-			h := carrier.NewCommands(&cur)
+			h := carrier.NewCommands(cur)
 			_, err := h.InstallBackend("n", "t", "m", "g", "", "", "", 0, "op", progress, map[string]string{"A": "1"})
 			Expect(err).ToNot(HaveOccurred())
 			_, err = h.InstallBackendOp("n", "t", "m", "g", 0, "op", "load-1", time.Minute, progress, map[string]string{})
@@ -117,14 +135,25 @@ var _ = Describe("Forwarding holders", func() {
 			Expect(cases).To(HaveLen(19))
 		})
 
+		// The verbs that name no node (the fan-outs, and the reads of the
+		// registry and of the install bound) run on the first route that the
+		// table holds, so they reach b only on a table that holds b alone.
+		nodeless := map[string]bool{
+			"DeleteModelFiles": true, "HasRemoteModel": true, "InstallTimeout": true,
+			"UnloadRemoteModel": true, "UnloadRemoteModelContext": true,
+		}
+
 		for _, tc := range cases {
-			It("forwards "+tc.method+" to the carrier the pointer names", func() {
-				h := carrier.NewCommands(&cur)
+			It("forwards "+tc.method+" to the first route of the node", func() {
+				h := carrier.NewCommands(cur)
 				tc.call(h)
 				Expect(a.commands.seen()).To(Equal([]string{tc.method}))
 				Expect(b.commands.seen()).To(BeEmpty())
 
-				cur.Store(b.set)
+				moveToB()
+				if nodeless[tc.method] {
+					h = carrier.NewCommands(tableFrom(nil, b))
+				}
 				tc.call(h)
 				Expect(a.commands.seen()).To(Equal([]string{tc.method}))
 				Expect(b.commands.seen()).To(Equal([]string{tc.method}))
@@ -135,7 +164,7 @@ var _ = Describe("Forwarding holders", func() {
 			var got []string
 			fake := &argCommands{fakeCommands: a.commands, got: &got}
 			a.set.Commands = fake
-			h := carrier.NewCommands(&cur)
+			h := carrier.NewCommands(cur)
 
 			reply, err := h.OperationControl("node-7", workerctl.OperationRequest{Renew: []string{"op-9"}})
 			Expect(err).ToNot(HaveOccurred())
@@ -157,11 +186,11 @@ var _ = Describe("Forwarding holders", func() {
 		}
 
 		for _, tc := range cases {
-			It("forwards "+tc.method+" to the carrier the pointer names", func() {
-				h := carrier.NewFiles(&cur)
+			It("forwards "+tc.method+" to the first route of the node", func() {
+				h := carrier.NewFiles(cur)
 				tc.call(h)
 				Expect(a.files.seen()).To(Equal([]string{tc.method}))
-				cur.Store(b.set)
+				moveToB()
 				tc.call(h)
 				Expect(b.files.seen()).To(Equal([]string{tc.method}))
 				Expect(a.files.seen()).To(HaveLen(1))
@@ -169,21 +198,21 @@ var _ = Describe("Forwarding holders", func() {
 		}
 
 		It("is the batch release the file staging client looks for", func() {
-			var stager nodes.FileStager = carrier.NewFiles(&cur)
+			var stager nodes.FileStager = carrier.NewFiles(cur)
 			_, ok := stager.(nodes.RequestFileReleaser)
 			Expect(ok).To(BeTrue(), "a holder that hid the extension would silently turn batch release into one call per key")
 		})
 	})
 
 	Describe("Clients", func() {
-		It("builds the client with the factory the pointer names", func() {
-			h := carrier.NewClients(&cur)
+		It("builds the client with the factory of the first route of the node", func() {
+			h := carrier.NewClients(cur)
 			_ = h.NewClient("node-1", "10.0.0.1:50051", true)
 			Expect(a.clients.gotNode).To(Equal("node-1"))
 			Expect(a.clients.gotAddr).To(Equal("10.0.0.1:50051"))
 			Expect(a.clients.gotParallel).To(BeTrue())
 
-			cur.Store(b.set)
+			moveToB()
 			_ = h.NewClient("node-2", "x", false)
 			Expect(a.clients.seen()).To(HaveLen(1))
 			Expect(b.clients.gotNode).To(Equal("node-2"))
@@ -191,12 +220,12 @@ var _ = Describe("Forwarding holders", func() {
 	})
 
 	Describe("WorkerDialer", func() {
-		It("dials with the carrier the pointer names at the moment of each dial", func() {
-			dialFor := carrier.NewRoutedWorkerDialer(&cur, nil)
+		It("dials on the route of the node at the moment of each dial", func() {
+			dialFor := carrier.NewRoutedWorkerDialer(cur)
 			dial := dialFor("node-1") // a client keeps this function for good
 
 			_, _ = dial(ctx, "tcp", "x:1")
-			cur.Store(b.set)
+			moveToB()
 			_, _ = dial(ctx, "tcp", "x:1")
 
 			Expect(a.dialed.seen()).To(Equal([]string{"dial:node-1"}))
@@ -205,23 +234,51 @@ var _ = Describe("Forwarding holders", func() {
 	})
 
 	Describe("Agents", func() {
-		It("forwards both verbs to the carrier the pointer names", func() {
-			h := carrier.NewAgents(&cur)
+		It("forwards both verbs to the first route that carries the agent RPC", func() {
+			h := carrier.NewAgents(cur)
 			_, _ = h.ExecuteMCPTool(ctx, mcpRemote.MCPToolRequest{})
 			_, _ = h.DiscoverMCPTools(ctx, mcpRemote.MCPDiscoveryRequest{})
-			cur.Store(b.set)
+			// A call that names no worker goes to the first route that carries
+			// the agent RPC: b, on a table that holds b alone.
+			h = carrier.NewAgents(tableFrom(nil, b))
 			_, _ = h.ExecuteMCPTool(ctx, mcpRemote.MCPToolRequest{})
 			Expect(a.agents.seen()).To(Equal([]string{"ExecuteMCPTool", "DiscoverMCPTools"}))
 			Expect(b.agents.seen()).To(Equal([]string{"ExecuteMCPTool"}))
 		})
+
+		It("sends a call that names an agent worker on the routes of that worker", func() {
+			nats := newFakeCarrier(nodes.RouteDirect)
+			tun := newFakeCarrier(nodes.RouteTunnel)
+			nats.agents.absent = map[string]bool{"both": true}
+			t := tableOf(map[string][]nodes.Route{
+				"on-nats":   {{Kind: nodes.RouteDirect}},
+				"on-tunnel": {{Kind: nodes.RouteTunnel}},
+				"both":      {{Kind: nodes.RouteDirect}, {Kind: nodes.RouteTunnel}},
+				"nowhere":   nil,
+			}, nats, tun)
+			h := carrier.NewAgents(t)
+
+			reply, err := h.ExecuteMCPToolOn(ctx, "on-nats", mcpRemote.MCPToolRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reply.Result).To(Equal("ran on on-nats"))
+			_, err = h.DiscoverMCPToolsOn(ctx, "on-tunnel", mcpRemote.MCPDiscoveryRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			_, err = h.ExecuteMCPToolOn(ctx, "both", mcpRemote.MCPToolRequest{})
+			Expect(err).ToNot(HaveOccurred(), "no responder on the subject of the node moves the call to its tunnel")
+			_, err = h.ExecuteMCPToolOn(ctx, "nowhere", mcpRemote.MCPToolRequest{})
+			Expect(err).To(MatchError(nodes.ErrNoRoute))
+
+			Expect(nats.agents.seen()).To(Equal([]string{"ExecuteMCPToolOn:on-nats", "ExecuteMCPToolOn:both"}))
+			Expect(tun.agents.seen()).To(Equal([]string{"DiscoverMCPToolsOn:on-tunnel", "ExecuteMCPToolOn:both"}))
+		})
 	})
 
 	Describe("a call in flight", func() {
-		It("finishes on the carrier it started on, and a new call goes to the new one", func() {
+		It("finishes on the route it started on, and a new call goes to the next route", func() {
 			gate := make(chan struct{})
 			entered := make(chan struct{}, 1)
 			a.set.Commands = &gatedCommands{fakeCommands: a.commands, gate: gate, entered: entered}
-			h := carrier.NewCommands(&cur)
+			h := carrier.NewCommands(cur)
 
 			done := make(chan error, 1)
 			go func() {
@@ -230,7 +287,7 @@ var _ = Describe("Forwarding holders", func() {
 			}()
 			Eventually(entered).Should(Receive())
 
-			cur.Store(b.set)
+			moveToB()
 			Expect(h.PingNode("n")).To(Succeed())
 			Expect(b.commands.seen()).To(Equal([]string{"PingNode"}))
 
@@ -242,15 +299,24 @@ var _ = Describe("Forwarding holders", func() {
 
 	Describe("hot path", func() {
 		It("adds no allocation to a forwarded call", func() {
-			h := carrier.NewCommands(&cur)
-			cl := carrier.NewClients(&cur)
-			dial := carrier.NewRoutedWorkerDialer(&cur, nil)("node-1")
-
-			cur.Store(newQuietCarrier().set)
+			cur = carrier.NewRouteTable(nil)
+			cur.Pin(newQuietCarrier().route())
+			h := carrier.NewCommands(cur)
+			cl := carrier.NewClients(cur)
+			dial := carrier.NewRoutedWorkerDialer(cur)("node-1")
 
 			Expect(testing.AllocsPerRun(1000, func() { _ = h.PingNode("node-1") })).To(BeZero())
 			Expect(testing.AllocsPerRun(1000, func() { _ = cl.NewClient("node-1", "x:1", false) })).To(BeZero())
 			Expect(testing.AllocsPerRun(1000, func() { _, _ = dial(ctx, "tcp", "x:1") })).To(BeZero())
+		})
+
+		It("adds no allocation when the routes of the node come from the cache", func() {
+			routes := []nodes.Route{{Kind: nodes.RouteDirect}}
+			cur = carrier.NewRouteTable(func(context.Context, string) ([]nodes.Route, error) { return routes, nil })
+			cur.Pin(newQuietCarrier().route())
+			h := carrier.NewCommands(cur)
+			Expect(h.PingNode("node-1")).To(Succeed())
+			Expect(testing.AllocsPerRun(1000, func() { _ = h.PingNode("node-1") })).To(BeZero())
 		})
 	})
 })
@@ -306,7 +372,7 @@ type quietClients struct{}
 func (quietClients) NewClient(string, string, bool) grpc.Backend { return nil }
 
 func newQuietCarrier() *fakeCarrier {
-	f := newFakeCarrier(cluster.CarrierNATS, 9)
+	f := newFakeCarrier(nodes.RouteDirect)
 	f.set.Commands = quietCommands{f.commands}
 	f.set.Clients = quietClients{}
 	f.set.Dialer = func(string) func(context.Context, string, string) (net.Conn, error) { return quietDial }

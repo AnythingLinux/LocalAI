@@ -9,12 +9,14 @@ import AppsView from '../components/addons/AppsView'
 import BrowseView from '../components/addons/BrowseView'
 import LibrariesView from '../components/addons/LibrariesView'
 import HostAccessView from '../components/addons/HostAccessView'
-import InstallFromFile from '../components/addons/InstallFromFile'
+import InstallFromFile, { FileInstallBanner } from '../components/addons/InstallFromFile'
+import { useFileInstall } from '../components/addons/useFileInstall'
 import InstallDialog from '../components/addons/InstallDialog'
 import AddonQueue from '../components/addons/AddonQueue'
 import { useInstallQueue } from '../components/addons/useInstallQueue'
 import { useHostGrants } from '../components/addons/useHostGrants'
-import { pendingApprovals } from '../components/addons/hostGrantsState'
+import { useAddonUpgrades } from '../hooks/useAddonUpgrades'
+import { awaitingApproval } from '../components/addons/hostGrantsState'
 import { resolveManage, resolveTab, visibleTabs } from '../components/addons/addonState'
 import '../components/addons/addons.css'
 
@@ -41,11 +43,16 @@ export default function Addons() {
   // Host access is read once here: the tab shows how many approvals wait, and
   // the list of add-ons shows the same banners.
   const grants = useHostGrants({ enabled: Boolean(isAdmin) })
-  const waiting = grants.data ? pendingApprovals(grants.data).length : 0
+  // An approval whose upgrade is queued or running no longer waits for anyone.
+  const upgrades = useAddonUpgrades()
+  const waiting = awaitingApproval(grants.data, (id) => upgrades.live.find(op => op.addonId === id) || null).length
   // The installs of the background queue and the dialog that reviews them.
   // They live on the page, not on a tab: the rows stay in view while the
   // person moves between the tabs.
   const queue = useInstallQueue({ adapter: addonsCatalog })
+  // The install from a file lives here, above the tabs, so a dialog the person
+  // closed still tells how its install goes from whatever tab is open.
+  const fileInstall = useFileInstall({ onInstalled: () => setListKey(n => n + 1) })
   const [installed, setInstalled] = useState({})
   useEffect(() => {
     if (!queue.current) return undefined
@@ -103,7 +110,7 @@ export default function Addons() {
         actions={isAdmin && tab === 'apps' ? (
           <>
             {showFind && <Button variant="primary" icon="store" to="/app/addons?tab=browse" data-testid="addons-add">{t('drawer.add')}</Button>}
-            <InstallFromFile onInstalled={() => setListKey(n => n + 1)} />
+            <InstallFromFile install={fileInstall} />
           </>
         ) : null}
       />
@@ -132,9 +139,10 @@ export default function Addons() {
       )}
 
       {isAdmin && <AddonQueue queue={queue} />}
+      {isAdmin && <FileInstallBanner install={fileInstall} onRetry={() => select('apps')} />}
 
       <div role="tabpanel" id={`ad-panel-${tab}`} aria-labelledby={tabs.length > 1 ? `ad-tab-${tab}` : undefined} aria-label={tabs.length > 1 ? undefined : t('tabs.apps')} className="ad-panel">
-        {tab === 'apps' && <AppsView key={`${listKey}:${queue.tick}`} api={addonsApi} adapter={addonsCatalog} onSummary={setSummary} grants={grants} queue={queue} />}
+        {tab === 'apps' && <AppsView key={`${listKey}:${queue.tick}`} api={addonsApi} adapter={addonsCatalog} onSummary={setSummary} grants={grants} queue={queue} fileOp={fileInstall.activity} />}
         {tab === 'browse' && <BrowseView api={addonsApi} adapter={addonsCatalog} queue={queue} />}
         {tab === 'libraries' && <LibrariesView adapter={addonsCatalog} />}
         {tab === 'access' && <HostAccessView grants={grants} />}

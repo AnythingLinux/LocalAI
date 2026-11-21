@@ -649,7 +649,9 @@
     },
     "waitingService": "The add-on service is starting. LocalAI asks about the update again in {{seconds}} s.",
     "checkAgain": "Check now",
-    "open": "Open Updates"
+    "open": "Open Updates",
+    "cancelledNote": "The update of {{name}} was canceled. Version {{version}} keeps running.",
+    "cancelling": "Canceling…"
   },
   "install": {
     "stepsLabel": "Install steps",
@@ -706,6 +708,7 @@
     "updateTitle": "Update to {{version}}"
   },
   "flow": {
+    "background": "This runs in the background. You can close this window; closing does not stop it.",
     "installAndTurnOn": "Install and turn on",
     "installing": "Installing {{name}}...",
     "turningOn": "Turning on {{name}}...",
@@ -792,6 +795,7 @@
       "action": "Approve and update",
       "body": "Version {{current}} of {{name}} keeps running. If you approve, the new version can run these actions. New ones are marked.",
       "done": "{{name}} was updated.",
+      "running": "The update runs in the background. You can close this window; closing does not stop it. Choose Cancel to stop it.",
       "title": "Approve host access for {{name}} {{version}}"
     },
     "asksNothing": "This add-on asks for no host access.",
@@ -896,6 +900,7 @@
     "newOptional": "The new version also asks for {{ops}}. These are optional and not allowed.",
     "noLongerRequested": "This version no longer asks for it. You can turn it off.",
     "notOfficialWarning": "This add-on comes from {{library}}, not the official library. It runs as trusted code on this server and can use the credentials it is given. Install it only if you trust its author.",
+    "signedNotReviewed": "Signed by {{signer}}. Not reviewed by LocalAI. It runs as trusted code on this server and can use the credentials it is given. Install it only if you trust the signer.",
     "op": {
       "alreadyAllowed": "Already allowed",
       "blocked": "Blocked by the administrator policy",
@@ -927,9 +932,14 @@
     "tabWaiting": "Approvals waiting: {{count}}",
     "waiting": {
       "body": "The new version asks for host access that the current one does not have. Version {{current}} keeps running until you approve. Operations it adds: {{count}}.",
+      "cancellingTitle": "Canceling the update of {{name}}",
+      "failedTitle": "The update of {{name}} to {{version}} failed",
+      "queuedBody": "It is queued and runs in the background.",
       "review": "Review and approve",
+      "reviewAgain": "Review again",
       "reviewNamed": "Review and approve the host access of {{name}}",
-      "title": "{{name}} {{version}} waits for your approval"
+      "title": "{{name}} {{version}} waits for your approval",
+      "updatingTitle": "Updating {{name}} to {{version}}"
     }
   },
   "oauthClient": {
@@ -1013,7 +1023,10 @@
       "downgradeTitle": "Older version",
       "downgrade": "This installs version {{version}}, which is older than the installed version {{installed}}. An older version may not read data that a newer one wrote.",
       "downgradeConfirm": "I want to install the older version"
-    }
+    },
+    "progress": "Installing {{name}} from a file. It runs in the background.",
+    "failedTitle": "Installing {{name}} from a file failed",
+    "failedHint": "The file is kept for one hour. Choose Try again to use it once more."
   },
   "notice": {
     "enableFailedTitle": "Could not turn on {{name}}",

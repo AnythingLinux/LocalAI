@@ -4,24 +4,21 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mudler/LocalAI/core/services/cluster"
 	"github.com/mudler/LocalAI/core/services/messaging"
 	"github.com/mudler/LocalAI/core/services/nodes"
 	"github.com/mudler/LocalAI/core/services/storage"
 )
 
-// NATSClient is the connection a NATS set is built over. *messaging.Client
+// NATSClient is the connection the direct route is built over. *messaging.Client
 // satisfies it.
 type NATSClient interface {
 	messaging.MessagingClient
 	OnReconnect(func())
 }
 
-// NATSOptions is what NewNATSSet needs besides the connection.
+// NATSOptions is what NewNATSRoutes needs besides the connection.
 type NATSOptions struct {
 	Client NATSClient
-	// Epoch is the epoch of the cluster row the set is built for.
-	Epoch int64
 
 	// Registry finds the nodes that hold a model, for the verbs that fan out.
 	Registry nodes.ModelLocator
@@ -50,13 +47,18 @@ type NATSOptions struct {
 	// dialled on a loopback address, which would name a port on the frontend and
 	// make a healthy backend look dead. Without it every address is dialled.
 	NodeHasAddress func(nodeID string) (bool, error)
+
+	// Shared says that the connection belongs to the caller: the NATS bus of the
+	// broadcaster holder uses it too. Close then leaves it open.
+	Shared bool
 }
 
-// NewNATSSet builds the set of seam implementations that run over NATS for
-// the control plane and over a direct dial to the worker for gRPC and HTTP.
-func NewNATSSet(o NATSOptions) (*Set, error) {
+// NewNATSRoutes builds the direct route: the control verbs and the agent RPC
+// over NATS, and the gRPC and HTTP connections by a direct dial of the address
+// of the worker. Close closes the NATS connection, unless o.Shared.
+func NewNATSRoutes(o NATSOptions) (*WorkerRoute, error) {
 	if o.Client == nil {
-		return nil, fmt.Errorf("NATS set needs a connection")
+		return nil, fmt.Errorf("the direct route needs a NATS connection")
 	}
 	dial := nodes.DirectWorkerNetDialer()
 
@@ -74,26 +76,24 @@ func NewNATSSet(o NATSOptions) (*Set, error) {
 		clients = nodes.NewGuardedDirectClientFactory(o.Token, o.NodeHasAddress)
 	}
 
-	set := &Set{
-		Name:        cluster.CarrierNATS,
-		Epoch:       o.Epoch,
-		Broadcaster: o.Client,
-		OnReconnect: o.Client.OnReconnect,
-		Commands:    nodes.NewRemoteUnloaderAdapter(o.Registry, o.Client, o.InstallTimeout, o.UpgradeTimeout),
-		Files:       files,
-		Clients:     clients,
-		Dialer:      dial,
-		Agents:      nodes.NewNATSAgentControl(o.Client),
-		Replies:     o.Client,
-		Close:       o.Client.Close,
+	route := &WorkerRoute{
+		Kind:     nodes.RouteDirect,
+		Commands: nodes.NewRemoteUnloaderAdapter(o.Registry, o.Client, o.InstallTimeout, o.UpgradeTimeout),
+		Files:    files,
+		Clients:  clients,
+		Dialer:   dial,
+		Agents:   nodes.NewNATSAgentControl(o.Client),
+	}
+	if !o.Shared {
+		route.Close = o.Client.Close
 	}
 	// The HTTP stager keeps one client for each node, and nothing else ever drops
 	// it.
 	if stager, ok := files.(*nodes.HTTPFileStager); ok {
-		set.ForgetNode = stager.ForgetNode
+		route.ForgetNode = stager.ForgetNode
 	}
-	if err := set.Validate(); err != nil {
+	if err := route.Validate(); err != nil {
 		return nil, err
 	}
-	return set, nil
+	return route, nil
 }

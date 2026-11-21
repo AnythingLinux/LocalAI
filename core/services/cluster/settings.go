@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,80 +23,96 @@ const (
 	// SettingNATSWorkerURL is the address that workers are told to use, when it
 	// differs from the one the frontends use. It defaults to SettingNATSURL.
 	SettingNATSWorkerURL = "nats.worker_url"
-	// SettingPrepareTimeout is how long a change of carrier waits for every
-	// replica to be ready.
-	SettingPrepareTimeout = "switch.prepare_timeout"
-	// SettingTransitionWindow is how long a change waits for every replica to
-	// confirm that it uses the new carrier.
-	SettingTransitionWindow = "switch.transition_window"
-	// SettingMaxDrain is how long the previous carrier stays attached after a
-	// change.
-	SettingMaxDrain = "switch.max_drain"
+
+	// SettingCarrierWeightNATS, SettingCarrierWeightWebSocket and
+	// SettingCarrierWeightP2P are the three parts of routing.carrier_weights: how
+	// much the router prefers a node that a frontend reaches over NATS, over a
+	// WebSocket tunnel or over P2P, when two nodes fit a request equally well.
+	// One row per carrier, so that a partial update never reads and rewrites the
+	// others.
+	SettingCarrierWeightNATS      = "routing.carrier_weights.nats"
+	SettingCarrierWeightWebSocket = "routing.carrier_weights.websocket"
+	SettingCarrierWeightP2P       = "routing.carrier_weights.p2p"
 )
+
+// Carrier weights are whole numbers in this range. 0 means "use this carrier
+// only when no other carrier fits".
+const (
+	MinCarrierWeight = 0
+	MaxCarrierWeight = 1000
+)
+
+// CarrierWeights is the tie-break between equally fit nodes that are reached
+// over different carriers. A higher weight wins. It never overrides fit.
+type CarrierWeights struct {
+	NATS      int `json:"nats"`
+	WebSocket int `json:"websocket"`
+	P2P       int `json:"p2p"`
+}
+
+// DefaultCarrierWeights prefers NATS, then a WebSocket tunnel, then P2P.
+var DefaultCarrierWeights = CarrierWeights{NATS: 100, WebSocket: 50, P2P: 25}
+
+// CarrierWeightKeys maps the name of a weight in the API (nats, websocket, p2p)
+// to the key of the setting that stores it.
+var CarrierWeightKeys = map[string]string{
+	"nats":      SettingCarrierWeightNATS,
+	"websocket": SettingCarrierWeightWebSocket,
+	"p2p":       SettingCarrierWeightP2P,
+}
+
+func carrierWeightSetting(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("not a whole number: %q", v)
+	}
+	if n < MinCarrierWeight || n > MaxCarrierWeight {
+		return fmt.Errorf("a weight must be between %d and %d, not %d", MinCarrierWeight, MaxCarrierWeight, n)
+	}
+	return nil
+}
+
+// CarrierWeightsFrom reads the weights from the stored settings. A weight that
+// is not stored, or that no longer parses, is the default.
+func CarrierWeightsFrom(all map[string]string) CarrierWeights {
+	w := DefaultCarrierWeights
+	for key, dst := range map[string]*int{
+		SettingCarrierWeightNATS:      &w.NATS,
+		SettingCarrierWeightWebSocket: &w.WebSocket,
+		SettingCarrierWeightP2P:       &w.P2P,
+	} {
+		if v, ok := all[key]; ok && carrierWeightSetting(v) == nil {
+			*dst, _ = strconv.Atoi(v)
+		}
+	}
+	return w
+}
+
+// CarrierWeights reads the weights of the cluster. Every frontend reads the
+// same rows, so a change through one is seen by all.
+func (s *SettingsStore) CarrierWeights(ctx context.Context) (CarrierWeights, error) {
+	all, err := s.All(ctx)
+	if err != nil {
+		return DefaultCarrierWeights, err
+	}
+	return CarrierWeightsFrom(all), nil
+}
 
 // ErrUnknownSetting means a key is not one of the cluster settings.
 var ErrUnknownSetting = errors.New("unknown cluster setting")
 
 var knownSettings = map[string]func(string) error{
-	SettingNATSURL:          CheckNATSURL,
-	SettingNATSWorkerURL:    CheckNATSURL,
-	SettingPrepareTimeout:   durationSetting,
-	SettingTransitionWindow: durationSetting,
-	SettingMaxDrain:         durationSetting,
-}
+	SettingNATSURL:       CheckNATSURL,
+	SettingNATSWorkerURL: CheckNATSURL,
 
-// MinTiming is the shortest wait of a change that the cluster accepts. The
-// replicas read the row every two seconds, so a shorter wait would abort every
-// change before a replica could see it, and a value such as 1ns is a typo for
-// a value that is meant to be long.
-const MinTiming = 5 * time.Second
-
-func durationSetting(v string) error {
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return fmt.Errorf("not a duration: %w", err)
-	}
-	if d < MinTiming {
-		return fmt.Errorf("a wait must be at least %s, not %s", MinTiming, d)
-	}
-	return nil
+	SettingCarrierWeightNATS:      carrierWeightSetting,
+	SettingCarrierWeightWebSocket: carrierWeightSetting,
+	SettingCarrierWeightP2P:       carrierWeightSetting,
 }
 
 // CheckSetting says whether value may be stored for key. It stores nothing, so a
 // caller with several settings can refuse all of them before it writes one.
 func CheckSetting(key, value string) error { return checkSetting(key, value) }
-
-// Timings are the waits of a change.
-type Timings struct {
-	// PrepareTimeout is how long prepare waits for every live replica.
-	PrepareTimeout time.Duration `swaggertype:"integer"`
-	// TransitionWindow is how long commit waits for every live replica to
-	// confirm.
-	TransitionWindow time.Duration `swaggertype:"integer"`
-	// MaxDrain is how long the previous carrier stays attached after the commit.
-	// Work that is still running on it then is failed by the reaper.
-	MaxDrain time.Duration `swaggertype:"integer"`
-}
-
-// DefaultTimings are used for a timing that nothing sets.
-var DefaultTimings = Timings{
-	PrepareTimeout:   time.Minute,
-	TransitionWindow: 2 * time.Minute,
-	MaxDrain:         15 * time.Minute,
-}
-
-func (t Timings) withDefaults() Timings {
-	if t.PrepareTimeout <= 0 {
-		t.PrepareTimeout = DefaultTimings.PrepareTimeout
-	}
-	if t.TransitionWindow <= 0 {
-		t.TransitionWindow = DefaultTimings.TransitionWindow
-	}
-	if t.MaxDrain <= 0 {
-		t.MaxDrain = DefaultTimings.MaxDrain
-	}
-	return t
-}
 
 // Setting is one row of table cluster_settings.
 type Setting struct {
@@ -114,6 +131,11 @@ type SettingsStore struct{ db *gorm.DB }
 func NewSettingsStore(db *gorm.DB) (*SettingsStore, error) {
 	if err := db.AutoMigrate(&Setting{}); err != nil {
 		return nil, fmt.Errorf("migrating cluster_settings: %w", err)
+	}
+	// The waits of the old change of carrier (switch.*) are no setting any
+	// more. A database that stored them keeps no row that nothing reads.
+	if err := db.Where("key LIKE ?", "switch.%").Delete(&Setting{}).Error; err != nil {
+		return nil, fmt.Errorf("removing the settings of the change of carrier: %w", err)
 	}
 	return &SettingsStore{db: db}, nil
 }
@@ -239,27 +261,4 @@ func (s *SettingsStore) All(ctx context.Context) (map[string]string, error) {
 		out[r.Key] = r.Value
 	}
 	return out, nil
-}
-
-// Timings returns the timings of a change. A timing that the cluster did not set
-// comes from fallback, and one that fallback leaves at zero comes from
-// DefaultTimings.
-func (s *SettingsStore) Timings(ctx context.Context, fallback Timings) (Timings, error) {
-	all, err := s.All(ctx)
-	if err != nil {
-		return Timings{}, err
-	}
-	t := fallback
-	for key, dst := range map[string]*time.Duration{
-		SettingPrepareTimeout:   &t.PrepareTimeout,
-		SettingTransitionWindow: &t.TransitionWindow,
-		SettingMaxDrain:         &t.MaxDrain,
-	} {
-		if v, ok := all[key]; ok {
-			if d, err := time.ParseDuration(v); err == nil && d >= MinTiming {
-				*dst = d
-			}
-		}
-	}
-	return t.withDefaults(), nil
 }

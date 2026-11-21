@@ -83,6 +83,7 @@ export function normalizePreview(payload) {
     version: typeof p.version === 'string' ? p.version : '',
     revision: Number(p.revision) || 0,
     nonce: typeof p.nonce === 'string' ? p.nonce : '',
+    signer: typeof p.signer === 'string' ? p.signer : '',
     official: p.official === true ? true : (p.official === false ? false : null),
     // The owner keeps UI grants locked: the dialog shows what the add-on asks for and grants nothing.
     locked: p.locked === true,
@@ -266,6 +267,28 @@ export function blanketHolders(overview) {
 // The add-ons that wait for an approval, for the banner.
 export function pendingApprovals(overview) {
   return overview.addons.filter(a => a.pendingUpgrade && a.pendingUpgrade.delta.length > 0)
+}
+
+// Where the approval of one add-on stands, from the upgrade the store follows
+// for it: 'waiting' (no operation, the administrator has not approved),
+// 'queued' or 'running' (approved, the operation is on its way), 'cancelling',
+// or 'failed' (the operation ended badly, a new try is a new review).
+export function approvalStage(op) {
+  if (!op) return 'waiting'
+  if (op.state === 'failed') return 'failed'
+  if (op.state === 'cancelling') return 'cancelling'
+  return op.phase === 'queued' ? 'queued' : 'running'
+}
+
+// The approvals that still ask the administrator for something: an add-on whose
+// approved upgrade is queued, running or being canceled is not one of them. A
+// failed one is, since the next step is a new review.
+export function awaitingApproval(overview, opOf) {
+  if (!overview) return []
+  return pendingApprovals(overview).filter(a => {
+    const stage = approvalStage(opOf(a.id))
+    return stage === 'waiting' || stage === 'failed'
+  })
 }
 
 // ---- The blanket switch -----------------------------------------------------

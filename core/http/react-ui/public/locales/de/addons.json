@@ -649,7 +649,9 @@
     },
     "waitingService": "Der Add-on-Dienst startet. LocalAI fragt in {{seconds}} s erneut nach der Aktualisierung.",
     "checkAgain": "Jetzt prüfen",
-    "open": "Aktualisierungen öffnen"
+    "open": "Aktualisierungen öffnen",
+    "cancelledNote": "Das Update von {{name}} wurde abgebrochen. Version {{version}} läuft weiter.",
+    "cancelling": "Wird abgebrochen…"
   },
   "install": {
     "stepsLabel": "Install steps",
@@ -724,7 +726,8 @@
     "skillShadow": "Dieses Add-on ersetzt den integrierten Skill {{skill}}.",
     "skillShadowWarning": "Dieses Add-on ersetzt den integrierten Skill {{skill}}. Ein anderes Add-on ({{name}}) tut das bereits. Nur eines kann aktiv sein; welches, wählen Sie unter Einstellungen > Werkzeuge. Solange Sie nichts wählen, stellt das zuerst installierte es bereit.",
     "skillProvides": "Dieses Add-on stellt die Fähigkeit {{skill}} bereit.",
-    "skillProvidesWarning": "Dieses Add-on stellt die Fähigkeit {{skill}} bereit. Ein anderes Add-on ({{name}}) stellt sie ebenfalls bereit. Nur eines kann aktiv sein; wähle unter Einstellungen > Werkzeuge. Ohne Auswahl wird das zuerst installierte verwendet."
+    "skillProvidesWarning": "Dieses Add-on stellt die Fähigkeit {{skill}} bereit. Ein anderes Add-on ({{name}}) stellt sie ebenfalls bereit. Nur eines kann aktiv sein; wähle unter Einstellungen > Werkzeuge. Ohne Auswahl wird das zuerst installierte verwendet.",
+    "background": "Das läuft im Hintergrund. Sie können dieses Fenster schließen; das Schließen stoppt es nicht."
   },
   "family": {
     "pages": "Du suchst Seiten, die du oder ein Agent erstellt hast? Sie sind unter <go>Seiten</go>."
@@ -792,7 +795,8 @@
       "action": "Freigeben und aktualisieren",
       "body": "Version {{current}} von {{name}} läuft weiter. Gibst du frei, darf die neue Version diese Aktionen ausführen. Neue sind markiert.",
       "done": "{{name}} wurde aktualisiert.",
-      "title": "Host-Zugriff für {{name}} {{version}} freigeben"
+      "title": "Host-Zugriff für {{name}} {{version}} freigeben",
+      "running": "Das Update läuft im Hintergrund. Sie können dieses Fenster schließen; das Schließen stoppt es nicht. Mit „Abbrechen“ stoppen Sie es."
     },
     "asksNothing": "Dieses Add-on fordert keinen Host-Zugriff an.",
     "blanket": {
@@ -896,6 +900,7 @@
     "newOptional": "Die neue Version fordert auch {{ops}} an. Diese sind optional und nicht erlaubt.",
     "noLongerRequested": "Diese Version fordert es nicht mehr an. Du kannst es ausschalten.",
     "notOfficialWarning": "Dieses Add-on stammt aus {{library}}, nicht aus der offiziellen Bibliothek. Es läuft als vertrauenswürdiger Code auf diesem Server und kann die Zugangsdaten nutzen, die es erhält. Installiere es nur, wenn du seinem Autor vertraust.",
+    "signedNotReviewed": "Signiert von {{signer}}. Nicht von LocalAI geprüft. Es läuft als vertrauenswürdiger Code auf diesem Server und kann die Zugangsdaten nutzen, die es erhält. Installiere es nur, wenn du dem Signierer vertraust.",
     "op": {
       "alreadyAllowed": "Bereits erlaubt",
       "blocked": "Von der Administratorrichtlinie blockiert",
@@ -929,7 +934,12 @@
       "body": "Die neue Version fordert Host-Zugriff an, den die aktuelle nicht hat. Version {{current}} läuft weiter, bis du freigibst. Hinzukommende Operationen: {{count}}.",
       "review": "Prüfen und freigeben",
       "reviewNamed": "Den Host-Zugriff von {{name}} prüfen und freigeben",
-      "title": "{{name}} {{version}} wartet auf deine Freigabe"
+      "title": "{{name}} {{version}} wartet auf deine Freigabe",
+      "updatingTitle": "{{name}} wird auf {{version}} aktualisiert",
+      "queuedBody": "Es steht in der Warteschlange und läuft im Hintergrund.",
+      "cancellingTitle": "Die Aktualisierung von {{name}} wird abgebrochen",
+      "failedTitle": "Die Aktualisierung von {{name}} auf {{version}} ist fehlgeschlagen",
+      "reviewAgain": "Erneut prüfen"
     }
   },
   "oauthClient": {
@@ -1013,7 +1023,10 @@
       "downgradeTitle": "Ältere Version",
       "downgrade": "Dies installiert Version {{version}}, die älter ist als die installierte Version {{installed}}. Eine ältere Version kann Daten, die eine neuere geschrieben hat, eventuell nicht lesen.",
       "downgradeConfirm": "Ich möchte die ältere Version installieren"
-    }
+    },
+    "progress": "{{name}} wird aus einer Datei installiert. Es läuft im Hintergrund.",
+    "failedTitle": "Die Installation von {{name}} aus einer Datei ist fehlgeschlagen",
+    "failedHint": "Die Datei bleibt eine Stunde erhalten. Wählen Sie „Erneut versuchen“, um sie noch einmal zu verwenden."
   },
   "notice": {
     "enableFailedTitle": "{{name}} konnte nicht eingeschaltet werden",

@@ -221,7 +221,10 @@ type ReleaseAccess struct {
 	Digest string
 	// Official is true only when the package comes from the built-in official
 	// library and its receipt shows the official signer.
-	Official           bool
+	Official bool
+	// Signer is the identity that signed the package, when its library is not
+	// official and pins one.
+	Signer             string
 	Required, Optional []string
 	// Installed is true when the add-on is installed already, so the release
 	// would be an upgrade.
@@ -324,13 +327,19 @@ type HostGrantsInstallRequest struct {
 
 // HostGrantsQueueRequest is one install of the body of
 // POST /api/addons/host-grants/queue: what HostGrantsInstallRequest carries
-// for an install. It only takes an install from a library.
+// for an install or an upgrade. It only takes a release from a library, never
+// a local file.
 type HostGrantsQueueRequest struct {
-	OperationID string            `json:"operationId"`
-	SourceID    string            `json:"sourceId"`
-	AddonID     string            `json:"addonId"`
-	Version     string            `json:"version"`
-	Approve     HostGrantsApprove `json:"approve"`
+	OperationID string `json:"operationId"`
+	// Action is install (the default) or upgrade.
+	Action   string `json:"action,omitempty"`
+	SourceID string `json:"sourceId"`
+	AddonID  string `json:"addonId"`
+	Version  string `json:"version"`
+	// ExpectedDigest and CandidateDigest pin an upgrade; both or neither.
+	ExpectedDigest  string            `json:"expectedDigest,omitempty"`
+	CandidateDigest string            `json:"candidateDigest,omitempty"`
+	Approve         HostGrantsApprove `json:"approve"`
 }
 
 // HostGrantsQueuedRequest is the body of HostGrantsRunQueued and
@@ -483,6 +492,7 @@ type HostGrantsPreviewView struct {
 	Version   string `json:"version"`
 	Installed bool   `json:"installed"`
 	Official  bool   `json:"official"`
+	Signer    string `json:"signer,omitempty"`
 	// Added are the operations this version asks for that the installed
 	// version did not. Empty on an install.
 	Added        []string           `json:"added"`

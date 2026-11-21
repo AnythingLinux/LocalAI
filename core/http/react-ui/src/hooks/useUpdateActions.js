@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { backendsApi, operationsApi } from '../utils/api'
-import { addonsApi, addonsCatalog } from '../utils/addonsClient'
+import { addonsApi } from '../utils/addonsClient'
 import { addonUpgrades } from '../utils/addonUpgrades'
 import { useOperations } from './useOperations'
 import { useBulkUpgrade } from './useBulkUpgrade'
 import { useAddonUpgrade } from '../components/addons/useAddonUpgrade'
-import { useAddonActions } from '../components/addons/useAddonActions'
 import { upgradeFailureWords } from '../components/addons/updateReview'
 import { applyLocal, bulkItemsOf } from '../utils/updates'
 import { runAddonRow, runGalleryRow, runLibraryRow } from '../utils/updateRun'
@@ -44,7 +43,6 @@ export function useUpdateActions({ updates }) {
   // The one add-on upgrade of this page: the store follows the owner's
   // operation, the confirmation is the same dialog as on the Apps page.
   const addonUpgrade = useAddonUpgrade(addonsApi, { onChanged: () => readAddons() })
-  const addonActions = useAddonActions(addonsApi, { onSettled: () => readAddons(), adapter: addonsCatalog })
 
   const wordsOf = useCallback((res) => {
     switch (res.code) {
@@ -156,9 +154,11 @@ export function useUpdateActions({ updates }) {
   }), [addonUpgrade, rows, runRow])
 
   const retry = useCallback((row) => {
-    if (row.kind === 'addon' && row.jobID) addonUpgrades.retry(addonsApi, row.jobID)
+    // The approval of a held upgrade is spent when it is accepted: a new try is a new review.
+    if (row.approval && row.grant) setReview(row.grant)
+    else if (row.kind === 'addon' && row.jobID) addonUpgrades.retry(addonsApi, row.jobID)
     else runRow(row)
-  }, [runRow])
+  }, [runRow, setReview])
 
   const cancel = useCallback((row) => {
     // An add-on upgrade the store follows is cancelled on the server by its
@@ -184,6 +184,6 @@ export function useUpdateActions({ updates }) {
 
   return {
     rows, bulk, busy, update, retry, cancel, cancelRun, check, checking,
-    review, setReview, addonActions, confirmApi, announcement,
+    review, setReview, confirmApi, announcement,
   }
 }

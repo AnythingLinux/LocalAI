@@ -219,6 +219,26 @@ var _ = Describe("httpapi.Client against the LocalAI admin REST surface", func()
 		})
 	})
 
+	Describe("ListNodes", func() {
+		It("carries the live state of each route of a node", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal("/api/nodes"))
+				_, _ = w.Write([]byte(`[{"id":"n1","status":"healthy","attached":"tunnel","route_state":[{"route":"heartbeat","state":"live"},{"route":"nats","state":"down","reason":"connecting"},{"route":"tunnel","transport":"websocket","state":"live"}]}]`))
+			}))
+			defer srv.Close()
+			list, err := New(srv.URL, "").ListNodes(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(list).To(HaveLen(1))
+			Expect(list[0].Healthy).To(BeTrue())
+			Expect(list[0].Route).To(Equal("websocket"))
+			Expect(list[0].Routes).To(Equal([]localaitools.NodeRouteState{
+				{Route: "heartbeat", State: "live"},
+				{Route: "nats", State: "down", Reason: "connecting"},
+				{Route: "tunnel", Transport: "websocket", State: "live"},
+			}))
+		})
+	})
+
 	Describe("SearchModels with no query", func() {
 		It("sends sort=latest and an empty q", func() {
 			var got url.Values
@@ -822,29 +842,39 @@ var _ = Describe("Backend updates", func() {
 	})
 })
 
-var _ = Describe("Cluster carrier", func() {
-	It("issues GET /api/cluster/carrier and maps the report", func() {
+var _ = Describe("Carrier weights", func() {
+	It("reads the weights from GET /api/cluster/settings and writes them with PUT", func() {
+		var put map[string]map[string]int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			Expect(r.Method).To(Equal(http.MethodGet))
-			Expect(r.URL.Path).To(Equal("/api/cluster/carrier"))
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"active": "nats", "state": "commit", "target": "tunnel", "epoch": 7,
-				"drain_remaining_ns": 30e9,
-				"replicas":           []map[string]any{{"id": "r1", "version": "v1", "ready_epoch": 7}},
-				"workers": []map[string]any{{"id": "w1", "name": "n", "attached": []string{"nats"},
-					"can_follow": false, "reason": "old worker", "follow_error": "x"}},
-			})
+			Expect(r.URL.Path).To(Equal("/api/cluster/settings"))
+			view := map[string]any{
+				"carrier_weights":         map[string]int{"nats": 100, "websocket": 7, "p2p": 25},
+				"carrier_weights_default": map[string]int{"nats": 100, "websocket": 50, "p2p": 25},
+			}
+			if r.Method == http.MethodPut {
+				Expect(json.NewDecoder(r.Body).Decode(&put)).To(Succeed())
+				_ = json.NewEncoder(w).Encode(map[string]any{"saved": true, "settings": view})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(view)
 		}))
 		DeferCleanup(srv.Close)
+		c := New(srv.URL, "")
 
-		out, err := New(srv.URL, "").GetClusterCarrier(context.Background())
+		got, err := c.GetCarrierWeights(context.Background())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(out.Distributed).To(BeTrue())
-		Expect(out.Active).To(Equal("nats"))
-		Expect(out.Target).To(Equal("tunnel"))
-		Expect(out.DrainRemainingSeconds).To(BeNumerically("==", 30))
-		Expect(out.Replicas).To(HaveLen(1))
-		Expect(out.Workers[0].Reason).To(Equal("old worker"))
+		Expect(got.Distributed).To(BeTrue())
+		Expect(got.Weights.WebSocket).To(Equal(7))
+		Expect(got.Defaults.WebSocket).To(Equal(50))
+
+		ws := 7
+		set, err := c.SetCarrierWeights(context.Background(), localaitools.SetCarrierWeightsRequest{WebSocket: &ws})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(put).To(Equal(map[string]map[string]int{"carrier_weights": {"websocket": 7}}))
+		Expect(set.Weights.WebSocket).To(Equal(7))
+
+		_, err = c.SetCarrierWeights(context.Background(), localaitools.SetCarrierWeightsRequest{})
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("reports distributed=false when the server answers 503", func() {
@@ -853,7 +883,7 @@ var _ = Describe("Cluster carrier", func() {
 			_, _ = w.Write([]byte(`{"error":"distributed mode is not enabled on this frontend"}`))
 		}))
 		DeferCleanup(srv.Close)
-		out, err := New(srv.URL, "").GetClusterCarrier(context.Background())
+		out, err := New(srv.URL, "").GetCarrierWeights(context.Background())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(out.Distributed).To(BeFalse())
 	})

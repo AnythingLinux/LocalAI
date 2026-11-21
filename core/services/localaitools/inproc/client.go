@@ -124,9 +124,10 @@ type Client struct {
 	// configured.
 	Failover *failover.Manager
 
-	// Carrier backs get_cluster_carrier. nil on a frontend that is not
-	// distributed, where the tool reports distributed=false.
-	Carrier CarrierStatusSource
+	// CarrierWeights backs get_carrier_weights and set_carrier_weights. nil on a
+	// frontend that is not distributed, where the tools report distributed=false.
+	// *cluster.SettingsStore is one.
+	CarrierWeights CarrierWeightsStore
 
 	// P2P backs the P2P tools. nil makes them report that P2P is not
 	// available.
@@ -1457,38 +1458,61 @@ func (c *Client) ClearRouterCorpus(ctx context.Context, routerModel string) (*lo
 
 // ---- Cluster carrier ----
 
-// CarrierStatusSource is what get_cluster_carrier reads. *cluster.Switch is one.
-type CarrierStatusSource interface {
-	Status(ctx context.Context) (cluster.Report, error)
+// CarrierWeightsStore is where the carrier weights live. *cluster.SettingsStore is one.
+type CarrierWeightsStore interface {
+	CarrierWeights(ctx context.Context) (cluster.CarrierWeights, error)
+	Apply(ctx context.Context, changes []cluster.SettingChange, by string) error
 }
 
-func (c *Client) GetClusterCarrier(ctx context.Context) (*localaitools.ClusterCarrierStatus, error) {
-	if c.Carrier == nil {
-		return &localaitools.ClusterCarrierStatus{Distributed: false}, nil
+func carrierWeightsInfo(w cluster.CarrierWeights) *localaitools.CarrierWeightsInfo {
+	view := func(w cluster.CarrierWeights) *localaitools.CarrierWeightValues {
+		return &localaitools.CarrierWeightValues{NATS: w.NATS, WebSocket: w.WebSocket, P2P: w.P2P}
 	}
-	rep, err := c.Carrier.Status(ctx)
+	return &localaitools.CarrierWeightsInfo{Distributed: true, Weights: view(w), Defaults: view(cluster.DefaultCarrierWeights)}
+}
+
+func (c *Client) GetCarrierWeights(ctx context.Context) (*localaitools.CarrierWeightsInfo, error) {
+	if c.CarrierWeights == nil {
+		return &localaitools.CarrierWeightsInfo{Distributed: false}, nil
+	}
+	w, err := c.CarrierWeights.CarrierWeights(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := &localaitools.ClusterCarrierStatus{
-		Distributed:           true,
-		Active:                string(rep.Active),
-		State:                 string(rep.State),
-		Target:                string(rep.Target),
-		Epoch:                 rep.Epoch,
-		DrainRemainingSeconds: rep.DrainRemaining.Seconds(),
+	return carrierWeightsInfo(w), nil
+}
+
+func (c *Client) SetCarrierWeights(ctx context.Context, req localaitools.SetCarrierWeightsRequest) (*localaitools.CarrierWeightsInfo, error) {
+	if c.CarrierWeights == nil {
+		return nil, errors.New("this server is not distributed: there are no carrier weights to set")
 	}
-	for _, r := range rep.Replicas {
-		out.Replicas = append(out.Replicas, localaitools.ClusterReplicaInfo{ID: r.ID, Version: r.Version, ReadyEpoch: r.ReadyEpoch, ReadyReason: r.ReadyReason})
-	}
-	for _, w := range rep.Workers {
-		attached := make([]string, 0, len(w.Attached))
-		for _, a := range w.Attached {
-			attached = append(attached, string(a))
+	var batch []cluster.SettingChange
+	for _, p := range []struct {
+		key string
+		val *int
+	}{
+		{cluster.SettingCarrierWeightNATS, req.NATS},
+		{cluster.SettingCarrierWeightWebSocket, req.WebSocket},
+		{cluster.SettingCarrierWeightP2P, req.P2P},
+	} {
+		if p.val != nil {
+			batch = append(batch, cluster.SettingChange{Key: p.key, Value: strconv.Itoa(*p.val)})
 		}
-		out.Workers = append(out.Workers, localaitools.ClusterWorkerInfo{ID: w.ID, Name: w.Name, Attached: attached, CanFollow: w.CanFollow, Reason: w.Reason, FollowError: w.FollowError})
 	}
-	return out, nil
+	if len(batch) == 0 {
+		return nil, errors.New("give at least one of nats, websocket or p2p")
+	}
+	by := "assistant"
+	if u := c.actingUser(ctx); u != nil {
+		by = u.Email
+		if by == "" {
+			by = u.ID
+		}
+	}
+	if err := c.CarrierWeights.Apply(ctx, batch, by); err != nil {
+		return nil, err
+	}
+	return c.GetCarrierWeights(ctx)
 }
 
 // ---- P2P ----

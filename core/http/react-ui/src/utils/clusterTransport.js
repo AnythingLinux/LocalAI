@@ -1,83 +1,54 @@
-// Helpers for the cluster transport panel. They read the report that
-// GET /api/cluster/carrier and a dry run return.
+// Helpers for the cluster transport panel. They read GET /api/cluster/settings
+// (the broadcast bus of the frontend that answers, and the live frontends) and
+// the route state of each node in GET /api/nodes.
 
-export const CARRIERS = ['nats', 'tunnel']
+// The broadcast bus the frontend publishes on now, from the `bus` of the
+// settings: NATS while it reaches the NATS server, PostgreSQL otherwise.
+export function busLabel(bus) {
+  if (bus?.bus === 'nats') return 'NATS connected'
+  if (bus?.bus === 'postgres') return 'PostgreSQL'
+  return 'unknown'
+}
 
-export const CARRIER_LABELS = {
+// A note under the bus when NATS is configured and this frontend does not
+// reach it, or empty.
+export function busNote(bus) {
+  if (bus?.nats_configured && !bus?.nats_connected) {
+    return 'NATS is configured, but this frontend does not reach it. It broadcasts over PostgreSQL and is not ready until NATS is back.'
+  }
+  return ''
+}
+
+// How a worker attaches to a frontend. `tunnel` is the outbound websocket.
+const ROUTE_LABELS = {
   nats: 'NATS',
-  tunnel: 'Database tunnel',
+  tunnel: 'WebSocket',
 }
 
-export function carrierLabel(carrier) {
-  return CARRIER_LABELS[carrier] || carrier || 'unknown'
+export function routeLabel(route) {
+  return ROUTE_LABELS[route] || route || 'unknown'
 }
 
-export function otherCarrier(carrier) {
-  return carrier === 'tunnel' ? 'nats' : 'tunnel'
+// The routes a node reported it holds, from the `attached` column of the node.
+export function attachedRoutes(node) {
+  return String(node?.attached || '').split(',').map(r => r.trim()).filter(Boolean)
 }
 
-// A worker that reports no capabilities predates carrier switching. A worker
-// that can follow both carriers has an address of its own (dual-capable). A
-// worker that follows only the tunnel makes outbound connections only.
-export function workerProfile(worker) {
-  const follow = Array.isArray(worker?.follow) ? worker.follow : []
-  if (follow.length === 0) return 'legacy'
-  if (follow.includes('nats') && follow.includes('tunnel')) return 'dual'
-  if (follow.includes('tunnel')) return 'tunnel-only'
-  return 'nats-only'
-}
+// The routes of a worker to show, from the route_state of its node in
+// GET /api/nodes: NATS and the tunnel always, the heartbeat only when it is
+// lost (a live heartbeat is what every worker has). `name` is the key of the
+// route's word under swarm:route, and `tone` the chip tone of its state.
+const STATE_TONES = { live: 'ok', reconnecting: 'warn', down: 'error' }
 
-export const PROFILE_LABELS = {
-  legacy: 'Legacy (NATS only)',
-  dual: 'Dual-capable',
-  'tunnel-only': 'Tunnel-only',
-  'nats-only': 'NATS only',
-}
-
-// A replica is ready for the epoch in flight when it reported that epoch and
-// gave no reason why not. Outside a change there is nothing to wait for.
-export function replicaReady(replica, report) {
-  if (!replica) return false
-  if (replica.ready_reason) return false
-  if (report?.state === 'stable') return true
-  return Number(replica.ready_epoch) >= Number(report?.epoch)
-}
-
-// The server sends durations in nanoseconds. Returns "m:ss" or "h:mm:ss".
-export function formatCountdown(ns) {
-  const total = Math.max(0, Math.ceil(Number(ns || 0) / 1e9))
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  const two = n => String(n).padStart(2, '0')
-  return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`
-}
-
-export function stateLabel(report) {
-  if (!report) return ''
-  if (report.state === 'stable' && Number(report.drain_remaining_ns) > 0) return 'draining'
-  return report.state
-}
-
-// A dry run may be forced when every blocker says so.
-export function canForce(report) {
-  const blockers = report?.blockers || []
-  return blockers.length > 0 && blockers.every(b => b.forceable)
-}
-
-// Says whether a worker can follow a change to the other carrier, and why not.
-// A worker that reported why it cannot follow gives that reason. A worker that
-// predates carrier switching reports nothing and stays on NATS, so it cannot
-// follow a change to the tunnel, and the text says so. A worker whose
-// capabilities leave out the other carrier cannot follow either.
-export function followStatus(worker, active) {
-  if (worker?.follow_error) return { ok: false, text: worker.follow_error }
-  const target = otherCarrier(active)
-  if (workerProfile(worker) === 'legacy') {
-    return { ok: false, text: 'Cannot follow: predates carrier switching, stays on NATS' }
-  }
-  if (!worker.follow.includes(target) && !(worker.attached || []).includes(target)) {
-    return { ok: false, text: `Cannot follow a change to ${carrierLabel(target)}` }
-  }
-  return { ok: true, text: 'ok' }
+export function routeChips(routeState) {
+  if (!Array.isArray(routeState)) return []
+  return routeState
+    .filter(r => r && (r.route !== 'heartbeat' || r.state !== 'live'))
+    .map(r => ({
+      key: r.route,
+      name: r.route === 'tunnel' && (r.transport === 'websocket' || r.transport === 'p2p') ? r.transport : r.route,
+      state: STATE_TONES[r.state] ? r.state : 'down',
+      tone: STATE_TONES[r.state] || 'error',
+      reason: r.reason || '',
+    }))
 }
