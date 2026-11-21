@@ -30,6 +30,36 @@ func (p NATSModelFilePrefetcher) PrefetchModelFiles(ctx context.Context, nodeID 
 	return controlRequestJSONContext[workerctl.ModelPrefetchRequest, workerctl.ModelPrefetchReply](ctx, p.Bus, messaging.SubjectNodeModelPrefetch(nodeID), req, timeout)
 }
 
+// PrefetchModelFiles sends model.prefetch over the link of the carrier. It
+// returns when ctx ends, like NATSModelFilePrefetcher. A worker that answers
+// and does not serve the verb is an older worker: ErrNoRoute, as over NATS.
+func (a *nodeControl) PrefetchModelFiles(ctx context.Context, nodeID string, req workerctl.ModelPrefetchRequest, timeout time.Duration) (*workerctl.ModelPrefetchReply, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
+	type result struct {
+		reply *workerctl.ModelPrefetchReply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		reply, err := callVerb[workerctl.ModelPrefetchRequest, workerctl.ModelPrefetchReply](ctx, a.link, nodeID, workerctl.VerbModelPrefetch, req, timeout)
+		if err != nil && errors.Is(err, errVerbNotServed) {
+			err = fmt.Errorf("%w: %v", ErrNoRoute, err)
+		}
+		done <- result{reply, err}
+	}()
+	select {
+	case res := <-done:
+		return res.reply, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // controlRequestJSONContext is controlRequestJSON that returns when ctx ends.
 // The bus request has no context, so it runs on until its own timeout (capped
 // by the deadline of ctx) and its answer is dropped.

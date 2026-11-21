@@ -13608,6 +13608,188 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cluster/carrier": {
+            "get": {
+                "description": "Returns the active carrier (nats or tunnel), the epoch, the state of a change (stable, prepare or commit), the live replicas with their readiness, the workers and whether each could follow a change to the other carrier, the work in flight, and the cluster settings. Admin only. Answers 503 when distributed mode is off.",
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Report the transport of a distributed cluster",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/localai.CarrierStatusResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Distributed mode is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Takes a target (nats or tunnel) with dry_run and force, or abort. A dry run returns the preflight report and changes nothing. A request starts the change and returns 202 with the epoch to watch. A request that a blocker stops returns 422 with the blockers; force accepts the blockers that are forceable. A change already under way returns 409, and only abort is accepted then. Admin only.",
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Dry-run, start or abort a change of carrier",
+                "parameters": [
+                    {
+                        "description": "target, dry_run, force or abort",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.CarrierSwitchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Dry run report, or the row after an abort",
+                        "schema": {
+                            "$ref": "#/definitions/cluster.Report"
+                        }
+                    },
+                    "202": {
+                        "description": "Change started: state, active, target, epoch, force, warnings, row",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad body or target",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "A change is under way, or there is nothing to abort",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Blocked: error, blockers, report",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Distributed mode is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/cluster/settings": {
+            "get": {
+                "description": "Returns the NATS address of the frontends and of the workers and the waits of a change. A user name, password or query string in an address is dropped. Admin only.",
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Read the settings of the cluster",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/localai.ClusterSettingsView"
+                        }
+                    },
+                    "503": {
+                        "description": "Distributed mode is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Stores the NATS address, the address workers use, or the waits of a change. Saving a NATS address checks that the serving replica reaches it and makes NATS available; it does not switch the cluster. Admin only.",
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Store settings of the cluster",
+                "parameters": [
+                    {
+                        "description": "settings to store",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.ClusterSettingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "saved, nats.reachable when a NATS address was checked, settings",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Unknown setting, bad value, or a credential in an address",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "A change of carrier is under way",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "This replica cannot reach the NATS server",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Distributed mode is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/collections": {
             "get": {
                 "description": "The knowledge-base collections of the caller. shared lists the collections other people shared with the caller: name is the name to use in the other calls (the collection's own name, or shared:\u003cid\u003e when the caller has a collection of that name or two people share one under it), title its own name, owner the display name of the person who shared it and role viewer (search and read) or editor (also add and remove entries). shares gives, for each of the caller's own collections that was made shareable, its resource_id in /api/shares/collection and shared_with, the number of grants. sharing is false when this server cannot share collections (no named accounts). An administrator can add all_users=true to also get the other users' collections in user_groups. embedding_model names the model that indexes and searches the collections (collections_embedding_model), and embedding_model_installed says whether this server has it: without it, adding files and searching fail. search_mode says how a search finds passages: semantic (by meaning only) or hybrid (by meaning and by keyword). max_chunk_size and chunk_overlap are the chunking of a text in characters: a text of N characters becomes about N / (max_chunk_size - chunk_overlap) passages, and each passage is embedded once. Needs the collections feature.",
@@ -14259,6 +14441,291 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/federation": {
+            "get": {
+                "description": "Lists the instances that can serve a group (this server, id \"local\", and every remote of kind localai with its P2P tunnel state and its entries) and the groups. A group is a model name served by several of them with the policy least_busy or round_robin; each member has its health, whether it is drained, whether it is constrained (reached through a relay that limits the connection, so it takes a request only when no other member can) and the requests of this server in flight. Requests in flight are counted by each frontend for itself. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Show the federation",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/remotes.FederationView"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/federation/groups": {
+            "post": {
+                "description": "Makes a model named \"name\" whose requests go to one of \"members\" (at least two existing models: models of this server or entries of remotes) by \"policy\": least_busy (default; the member with the fewest requests of this server in flight) or round_robin. A member that fails is marked down and the request moves to the next member. The group is a model config with a balanced failover chain, so it shows under /api/failover too. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Create a federation group",
+                "parameters": [
+                    {
+                        "description": "The group",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.FederationGroupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/remotes.Group"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/federation/groups/{name}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Get a federation group",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Group name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/remotes.Group"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the group's model config. The members stay as they are. Admin only.",
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Delete a federation group",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Group name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "An absent field is left as it is. A new member list keeps the drain flag of the members that stay; the probe, trip and recovery settings of the group file are kept. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Update a federation group",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Group name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.FederationGroupUpdateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/remotes.Group"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/federation/groups/{name}/drain": {
+            "post": {
+                "description": "With drain true the member takes no new request; requests in flight finish and its health checks go on. With drain false it takes requests again. The last member that takes requests cannot be drained. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remotes"
+                ],
+                "summary": "Drain a member of a federation group",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Group name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Member and drain flag",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.FederationDrainRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/remotes.Group"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/schema.ErrorResponse"
                         }
@@ -15712,6 +16179,98 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/nodes/{id}/split-server": {
+            "put": {
+                "description": "A split server is a backend node that serves model-split workers (llama.cpp RPC and MLX helpers): it runs a P2P host with open ports, the frontends admit it on the gated relays they administer, and the helpers attached to it join the next model it loads. A node becomes one only by this admin action or by the --split-server flag of the worker; the admin's choice wins over the flag until DELETE. Clearing it detaches the split workers of the node (they wait, attached to no node, with a warning), removes its relay admission and stops its P2P host at its next exchange. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Declare a node a split server, or clear it",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Node ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Declaration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/localai.SetSplitServerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/localai.SetSplitServerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "agent node, or no split_server field",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "node not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Clears the admin's choice: the next registration of the worker sets the declaration from its --split-server flag. The current value stays until then. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Hand the split server declaration back to the worker flag",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Node ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "boolean"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "node not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/nodes/{id}/vram-budget": {
             "put": {
                 "tags": [
@@ -16005,36 +16564,841 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/p2p": {
+        "/api/p2p/devices": {
             "get": {
+                "description": "Lists the paired devices, revoked ones included, with how each one reaches the server now (path kind direct, hole_punched or relayed, the relay and its limits). Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "p2p"
                 ],
-                "summary": "Returns available P2P nodes",
+                "summary": "List P2P devices",
                 "responses": {
                     "200": {
-                        "description": "Response",
+                        "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/schema.P2PNodesResponse"
-                            }
+                            "$ref": "#/definitions/p2p.DeviceList"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
                         }
                     }
                 }
             }
         },
-        "/api/p2p/token": {
-            "get": {
+        "/api/p2p/devices/{id}": {
+            "delete": {
+                "description": "Revokes a device: it is removed from the allowlist, its connections are closed, every relay is told to drop it, and the API key of a remote device is revoked. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "p2p"
                 ],
-                "summary": "Show the P2P token",
+                "summary": "Revoke a P2P device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "Response",
+                        "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/p2p.RevokeResult"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Rename a P2P device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New label",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RenameDeviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.OKResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/identity/regenerate": {
+            "post": {
+                "description": "Makes a new peer identity for this server and restarts P2P with it. The old key is kept next to the new one as a backup. Every paired device and remote knows the old peer ID, so each must pair again. The body must be {\"confirm\": true}. Needs P2P mode connect or share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Regenerate the P2P identity",
+                "parameters": [
+                    {
+                        "description": "Confirmation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RegenerateIdentityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.Status"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/invites": {
+            "get": {
+                "description": "Lists the invites with their state: pending, used, expired or canceled. The links are not part of the answer. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "List P2P invites",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.InviteList"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates a one-time invite link. kind is device (P2P admission only; the person signs in as usual), remote (also issues an API key for the other server: limited to \"models\" when given, else every model this server lets a client key use, models added later too; \"all_models\": true asks for every model explicitly and is refused with a non-empty \"models\"), worker or split. A remote invite needs a signed-in user account: the API key set with LOCALAI_API_KEY gets 409. relays is \"auto\", \"none\" or a list of relay IDs. When a gated relay is named, a single-use relay pass is registered on it; \"relay.reason\" says why there is none. The link is shown once. Needs P2P mode share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Create a P2P invite",
+                "parameters": [
+                    {
+                        "description": "Invite to create",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.MintRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.MintResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/invites/{id}": {
+            "delete": {
+                "description": "Cancels a pending invite and drops its relay pass. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Cancel a P2P invite",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invite ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.OKResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/redeem": {
+            "post": {
+                "description": "Served only on the P2P protocol /localai/http/1; the normal HTTP listener answers 404. The caller's peer ID comes from the connection. A wrong, used, canceled or expired code all get the same 410 answer. After 5 wrong codes from one peer in an hour, or too many from all peers, the answer is 429. The answer carries the confirmation phrase to compare on both sides, and for a remote invite the API key (shown once).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Redeem a P2P invite (over P2P only)",
+                "parameters": [
+                    {
+                        "description": "Code and device name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RedeemRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RedeemResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays": {
+            "get": {
+                "description": "Lists the relays this server knows, with their mode (gated, open, unclaimed) and state (in_sync, out_of_sync, open, unclaimed, not_admin, denied, unreachable, checking). Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "List P2P relays",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RelayList"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Adds a relay by its address, which must end in /p2p/\u003crelay peer ID\u003e, and checks it. claim_code claims a relay that has no admin yet, with the code it printed at start. Needs P2P mode share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Add a P2P relay",
+                "parameters": [
+                    {
+                        "description": "Relay to add",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.AddRelayRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.Relay"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays/{id}": {
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Remove a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.OKResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays/{id}/check": {
+            "post": {
+                "description": "Connects to the relay, reserves a slot, reads whether this server is an admin, tests a circuit and compares the paired set. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Check a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RelayCheck"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays/{id}/claim": {
+            "post": {
+                "description": "Makes this server an admin of a relay that has none, with the one-time code the relay printed at start. Needs P2P mode share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Claim a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Claim code",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.ClaimRelayRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.Relay"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays/{id}/limits": {
+            "get": {
+                "description": "Reads the limits the relay runs with now: the data, the time and the bandwidth of one circuit (zero means no limit). ceiling is the most a change may set for each limit (zero means no ceiling); the operator of the relay sets it with the relay's flags. can_change says whether this server is an admin of the relay and may change them. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Read the limits of a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RelayLimitsInfo"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Changes the data, time and bandwidth limits of one circuit on a relay this server administers; a field left out stays as it is and zero removes that limit. The relay saves the new limits, so they stay over a restart of the relay. A new bandwidth limit applies to the next circuit at once. A new data or time limit makes the relay restart its circuit service: its reservations are dropped, running circuits keep their old limits until they end, and the paired devices reserve again within moments (\"restarted\" is true). A value above the ceiling of the relay, or zero for a limit that has a ceiling, is refused with 400 and an error that names the ceiling; nothing is clamped. Answers 409 when this server is not an admin of the relay or the relay is open. Needs P2P mode share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Change the limits of a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Limits to change",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.SetRelayLimitsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.RelayLimitsInfo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/relays/{id}/sync": {
+            "post": {
+                "description": "Pushes the full set of paired devices to the relay now. Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Sync a P2P relay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.Relay"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/split-workers": {
+            "get": {
+                "description": "Lists the paired llama.cpp RPC and MLX workers that lend their memory to models that run on this server or, in a cluster, on the backend node each is attached to (node_id), with their state (online, offline, slow, limited, refused), the path that reaches them and the memory they add. A worker reached only through a relay is \"slow\" until allow_slow_path is set. A relay of the user (own_relay: a gated relay this server administers) may carry it even with a data or time limit, and then ends each connection at the limit; its limits change with PUT /api/p2p/relays/{relay_id}/limits. A public relay never carries model layers (\"limited\"). Needs P2P mode share. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "List model-split workers",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.SplitWorkerList"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/split-workers/{id}": {
+            "patch": {
+                "description": "Sets node_id and/or allow_slow_path of a model-split worker. node_id attaches the worker to a backend node of the cluster (\"\" attaches it to this server): the worker moves to the node at its next session, the node forwards its port and the backends that the node starts use it. Pin the model to that node with a node selector. With allow_slow_path true the server or the node uses the worker over a relay (\"Use anyway\"): it works, but every token waits for the relay, and a relay of the user that limits each connection ends it at the limit. A public relay is never used. With false it uses the worker only over a direct or hole-punched path. A model that is loaded keeps its workers until it is loaded again. Needs P2P mode share. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "Use a model-split worker over a slow path, or attach it to a node",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID of the worker",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Change",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/p2p.SplitWorkerUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.SplitWorkerView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/p2p/status": {
+            "get": {
+                "description": "The mode in effect (off, connect or share), the peer ID and addresses of this server, its reachability, the relays that hold a reservation for it, whether it relays for its paired devices, and the number of pending invites and paired devices. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "p2p"
+                ],
+                "summary": "P2P status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/p2p.Status"
                         }
                     }
                 }
@@ -16150,7 +17514,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Saves a remote and turns each chosen model into a model config (an entry) that carries only the remote id. The key is stored sealed and is never returned. Models that cannot be adopted are listed in \"skipped\" with a reason. At most 500 models per call. When the remote is saved but some models could not be added, the answer is still 201 with \"warning\" set; read the lists and add the missing models with the adopt route, not with a second create. Admin only.",
+                "description": "Saves a remote and turns each chosen model into a model config (an entry) that carries only the remote id. The key is stored sealed and is never returned. With \"invite\" (an invite link of kind remote from another LocalAI) the server redeems the invite over P2P, keeps the key the other server issues, and reaches it through a forwarder on a loopback port; P2P must be on (mode connect or share), url and api_key must be empty, and the answer carries the confirmation \"phrase\". Models that cannot be adopted are listed in \"skipped\" with a reason. At most 500 models per call. When the remote is saved but some models could not be added, the answer is still 201 with \"warning\" set; read the lists and add the missing models with the adopt route, not with a second create. Admin only.",
                 "consumes": [
                     "application/json"
                 ],
@@ -16191,14 +17555,32 @@ const docTemplate = `{
                             "$ref": "#/definitions/schema.ErrorResponse"
                         }
                     },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
                     "413": {
                         "description": "Request Entity Too Large",
                         "schema": {
                             "$ref": "#/definitions/schema.ErrorResponse"
                         }
                     },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
                         "schema": {
                             "$ref": "#/definitions/schema.ErrorResponse"
                         }
@@ -21177,6 +22559,252 @@ const docTemplate = `{
                 }
             }
         },
+        "cluster.Blocker": {
+            "type": "object",
+            "properties": {
+                "forceable": {
+                    "description": "Forceable is true when a forced request goes ahead anyway.",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "cluster.Carrier": {
+            "type": "string",
+            "enum": [
+                "nats",
+                "tunnel"
+            ],
+            "x-enum-varnames": [
+                "CarrierNATS",
+                "CarrierTunnel"
+            ]
+        },
+        "cluster.CarrierRow": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "changed_at": {
+                    "description": "ChangedAt is stamped by the database on every change, and the age of a\nchange is read on that same clock (CarrierStore.DBNow), so that the\ntimeouts of a change need no clock that the replicas agree on.",
+                    "type": "string"
+                },
+                "changed_by": {
+                    "type": "string"
+                },
+                "draining": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "draining_until": {
+                    "type": "string"
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "force": {
+                    "description": "Force records that the admin who started the change accepted that a\nreplica which is not ready, or a worker that cannot follow, is left\nbehind. It belongs to one change and is cleared by the next one.",
+                    "type": "boolean"
+                },
+                "nats_url": {
+                    "description": "NATSURL is the address of the NATS server that this change, or the last\nchange to NATS, builds from. The admin starts a change and the replicas\nbuild in it, and an edit of the setting in between must not give two\nreplicas two servers, so every replica builds from this copy while a change\nis under way. It never carries a credential. Empty when the cluster has no\nNATS address.",
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note says in a sentence how the last change ended, or why it did. It is\nfor operators.",
+                    "type": "string"
+                },
+                "prev_epoch": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/cluster.State"
+                },
+                "target": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                }
+            }
+        },
+        "cluster.InFlight": {
+            "type": "object",
+            "properties": {
+                "loads": {
+                    "description": "Loads is the number of models that are loading.",
+                    "type": "integer"
+                }
+            }
+        },
+        "cluster.ReplicaStatus": {
+            "type": "object",
+            "properties": {
+                "availability": {
+                    "description": "Availability maps each carrier to the reason the replica cannot build it,\nempty when it can. A carrier it never looked at is absent.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "availability_age_ns": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "ready_epoch": {
+                    "type": "integer"
+                },
+                "ready_reason": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "cluster.Report": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "blockers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.Blocker"
+                    }
+                },
+                "drain_remaining_ns": {
+                    "description": "DrainRemaining is how long the previous carrier stays attached, when one\nis draining.",
+                    "type": "integer"
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "in_flight": {
+                    "$ref": "#/definitions/cluster.InFlight"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "replicas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.ReplicaStatus"
+                    }
+                },
+                "row": {
+                    "$ref": "#/definitions/cluster.CarrierRow"
+                },
+                "state": {
+                    "$ref": "#/definitions/cluster.State"
+                },
+                "target": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "timings": {
+                    "$ref": "#/definitions/cluster.Timings"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.WorkerStatus"
+                    }
+                }
+            }
+        },
+        "cluster.State": {
+            "type": "string",
+            "enum": [
+                "stable",
+                "prepare",
+                "commit"
+            ],
+            "x-enum-varnames": [
+                "StateStable",
+                "StatePrepare",
+                "StateCommit"
+            ]
+        },
+        "cluster.Timings": {
+            "type": "object",
+            "properties": {
+                "maxDrain": {
+                    "description": "MaxDrain is how long the previous carrier stays attached after the commit.\nWork that is still running on it then is failed by the reaper.",
+                    "type": "integer"
+                },
+                "prepareTimeout": {
+                    "description": "PrepareTimeout is how long prepare waits for every live replica.",
+                    "type": "integer"
+                },
+                "transitionWindow": {
+                    "description": "TransitionWindow is how long commit waits for every live replica to\nconfirm.",
+                    "type": "integer"
+                }
+            }
+        },
+        "cluster.WorkerStatus": {
+            "type": "object",
+            "properties": {
+                "attached": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.Carrier"
+                    }
+                },
+                "can_follow": {
+                    "description": "CanFollow and Reason are set when the report has a target.",
+                    "type": "boolean"
+                },
+                "follow": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.Carrier"
+                    }
+                },
+                "follow_error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "config.FailoverPolicy": {
+            "type": "string",
+            "enum": [
+                "priority",
+                "least_busy",
+                "round_robin"
+            ],
+            "x-enum-varnames": [
+                "FailoverPolicyPriority",
+                "FailoverPolicyLeastBusy",
+                "FailoverPolicyRoundRobin"
+            ]
+        },
         "config.Gallery": {
             "type": "object",
             "properties": {
@@ -21922,6 +23550,9 @@ const docTemplate = `{
                 "pinned": {
                     "type": "string"
                 },
+                "policy": {
+                    "$ref": "#/definitions/config.FailoverPolicy"
+                },
                 "state": {
                     "$ref": "#/definitions/failover.ChainState"
                 },
@@ -21963,6 +23594,18 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "consecutive_ok": {
+                    "type": "integer"
+                },
+                "constrained": {
+                    "description": "Constrained targets are tried last by a balanced chain.",
+                    "type": "boolean"
+                },
+                "drained": {
+                    "description": "Drained targets take no new request.",
+                    "type": "boolean"
+                },
+                "in_flight": {
+                    "description": "InFlight is the number of requests of this server that the target\nserves now. It is not shared between frontends.",
                     "type": "integer"
                 },
                 "kind": {
@@ -24088,6 +25731,128 @@ const docTemplate = `{
                 }
             }
         },
+        "localai.CarrierStatusResponse": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "blockers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.Blocker"
+                    }
+                },
+                "drain_remaining_ns": {
+                    "description": "DrainRemaining is how long the previous carrier stays attached, when one\nis draining.",
+                    "type": "integer"
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "in_flight": {
+                    "$ref": "#/definitions/cluster.InFlight"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "replicas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.ReplicaStatus"
+                    }
+                },
+                "row": {
+                    "$ref": "#/definitions/cluster.CarrierRow"
+                },
+                "settings": {
+                    "$ref": "#/definitions/localai.ClusterSettingsView"
+                },
+                "state": {
+                    "$ref": "#/definitions/cluster.State"
+                },
+                "target": {
+                    "$ref": "#/definitions/cluster.Carrier"
+                },
+                "timings": {
+                    "$ref": "#/definitions/cluster.Timings"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cluster.WorkerStatus"
+                    }
+                }
+            }
+        },
+        "localai.CarrierSwitchRequest": {
+            "type": "object",
+            "properties": {
+                "abort": {
+                    "type": "boolean"
+                },
+                "dry_run": {
+                    "type": "boolean"
+                },
+                "force": {
+                    "type": "boolean"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "localai.ClusterSettingsRequest": {
+            "type": "object",
+            "properties": {
+                "max_drain": {
+                    "type": "string"
+                },
+                "nats_url": {
+                    "type": "string"
+                },
+                "nats_worker_url": {
+                    "type": "string"
+                },
+                "prepare_timeout": {
+                    "type": "string"
+                },
+                "transition_window": {
+                    "type": "string"
+                }
+            }
+        },
+        "localai.ClusterSettingsView": {
+            "type": "object",
+            "properties": {
+                "max_drain": {
+                    "description": "MaxDrain is how long the previous carrier stays attached after a commit (a Go duration).",
+                    "type": "string"
+                },
+                "nats_url": {
+                    "description": "NATSURL is the NATS address that the frontends use.",
+                    "type": "string"
+                },
+                "nats_worker_url": {
+                    "description": "NATSWorkerURL is the NATS address that workers are told to use. Empty means NATSURL.",
+                    "type": "string"
+                },
+                "prepare_timeout": {
+                    "description": "PrepareTimeout is how long a change waits for every replica to be ready (a Go duration).",
+                    "type": "string"
+                },
+                "transition_window": {
+                    "description": "TransitionWindow is how long a replica may take to confirm a commit (a Go duration).",
+                    "type": "string"
+                }
+            }
+        },
         "localai.FailoverChainsResponse": {
             "type": "object",
             "properties": {
@@ -24104,6 +25869,56 @@ const docTemplate = `{
             "properties": {
                 "target": {
                     "type": "string"
+                }
+            }
+        },
+        "localai.FederationDrainRequest": {
+            "type": "object",
+            "properties": {
+                "drain": {
+                    "description": "Drain true stops new requests to the model; false starts them again.",
+                    "type": "boolean"
+                },
+                "model": {
+                    "type": "string"
+                }
+            }
+        },
+        "localai.FederationGroupRequest": {
+            "type": "object",
+            "properties": {
+                "members": {
+                    "description": "Members are the model names that serve the group: a model of this\nserver or an entry of a remote. At least two.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "description": "Name is the model name clients use for the group.",
+                    "type": "string"
+                },
+                "policy": {
+                    "description": "Policy is least_busy (default) or round_robin.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/config.FailoverPolicy"
+                        }
+                    ]
+                }
+            }
+        },
+        "localai.FederationGroupUpdateRequest": {
+            "type": "object",
+            "properties": {
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "policy": {
+                    "$ref": "#/definitions/config.FailoverPolicy"
                 }
             }
         },
@@ -24423,8 +26238,16 @@ const docTemplate = `{
         "localai.RemoteCreateRequest": {
             "type": "object",
             "properties": {
+                "allow_open_relay": {
+                    "description": "AllowOpenRelay accepts an invite that names an open relay.",
+                    "type": "boolean"
+                },
                 "api_key": {
                     "description": "write-only",
+                    "type": "string"
+                },
+                "invite": {
+                    "description": "Invite is an invite link of kind remote (localai://pair?...).\nWrite-only: it is a one-time credential.",
                     "type": "string"
                 },
                 "kind": {
@@ -24463,6 +26286,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "phrase": {
+                    "description": "Phrase is the confirmation phrase of a remote added by invite: the\nother server shows the same words in its device list.",
+                    "type": "string"
                 },
                 "remote": {
                     "$ref": "#/definitions/remotes.Remote"
@@ -24517,6 +26344,27 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "localai.SetSplitServerRequest": {
+            "type": "object",
+            "properties": {
+                "split_server": {
+                    "description": "SplitServer declares the node a split server, or clears it.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "localai.SetSplitServerResponse": {
+            "type": "object",
+            "properties": {
+                "detached": {
+                    "description": "Detached is the number of split workers that were attached to the node\nand are now attached to no node.",
+                    "type": "integer"
+                },
+                "split_server": {
+                    "type": "boolean"
                 }
             }
         },
@@ -25347,6 +27195,758 @@ const docTemplate = `{
                 }
             }
         },
+        "p2p.AddRelayRequest": {
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "description": "Addr must end in /p2p/\u003crelay peer ID\u003e.",
+                    "type": "string"
+                },
+                "claim_code": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.ClaimRelayRequest": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.ClientKey": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "secret": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.DeviceList": {
+            "type": "object",
+            "properties": {
+                "devices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/p2p.DeviceView"
+                    }
+                }
+            }
+        },
+        "p2p.DeviceView": {
+            "type": "object",
+            "properties": {
+                "all_models": {
+                    "description": "AllModels is true for a remote device that may use every model.",
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "models": {
+                    "description": "Models are the models a remote device is limited to.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "online": {
+                    "description": "Online is true while the device is connected.",
+                    "type": "boolean"
+                },
+                "path": {
+                    "$ref": "#/definitions/p2p.PathView"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is active or revoked.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.InviteList": {
+            "type": "object",
+            "properties": {
+                "invites": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/p2p.InviteView"
+                    }
+                }
+            }
+        },
+        "p2p.InviteView": {
+            "type": "object",
+            "properties": {
+                "all_models": {
+                    "description": "AllModels is true for a remote invite that grants every model, also\nfor one made without a list.",
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "device_peer_id": {
+                    "description": "DevicePeerID is the peer that redeemed a used invite.",
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "models": {
+                    "description": "Models are the models a remote invite is limited to. Device and worker\ninvites carry none.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "phrase": {
+                    "description": "Phrase is the confirmation phrase of a used invite: the words the\ndevice was shown when it redeemed. The admin compares them.",
+                    "type": "string"
+                },
+                "relay_pass": {
+                    "description": "RelayPass is the label of the relay that holds the pass of the invite;\nempty when the link carries no pass.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is pending, used, expired or canceled.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.MintRequest": {
+            "type": "object",
+            "properties": {
+                "all_models": {
+                    "description": "AllModels grants a remote invite every model this server lets a client\nkey use, models added later too. It is refused with a non-empty models.",
+                    "type": "boolean"
+                },
+                "allow_open_relay": {
+                    "description": "AllowOpenRelay lets the invite name an open relay.",
+                    "type": "boolean"
+                },
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kind": {
+                    "description": "Kind is device, remote, worker or split.",
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "models": {
+                    "description": "Models limits a remote invite to these models. An empty list means\nevery model, as before all_models existed.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "relays": {
+                    "description": "Relays is \"auto\", \"none\" or a list of relay IDs.",
+                    "type": "string",
+                    "example": "auto"
+                },
+                "ttl_seconds": {
+                    "description": "TTLSeconds is the life of the invite: 600 when zero, at most 86400.",
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.MintResult": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "qr": {
+                    "description": "QR says whether the interface may show the link as a QR code (device\nand remote invites only).",
+                    "type": "boolean"
+                },
+                "relay": {
+                    "$ref": "#/definitions/p2p.RelayPass"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "p2p.OKResponse": {
+            "type": "object",
+            "properties": {
+                "ok": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.PathView": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "description": "Kind is none, direct, hole_punched or relayed.",
+                    "type": "string"
+                },
+                "limit_bytes": {
+                    "type": "integer"
+                },
+                "limit_seconds": {
+                    "type": "integer"
+                },
+                "limited": {
+                    "type": "boolean"
+                },
+                "relay_label": {
+                    "type": "string"
+                },
+                "rtt_ms": {
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.PublicDHTInfo": {
+            "type": "object",
+            "properties": {
+                "on": {
+                    "type": "boolean"
+                },
+                "peers": {
+                    "description": "Peers is the number of peers the host is connected to.",
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.RedeemRequest": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "v": {
+                    "description": "V is the protocol version, 1.",
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.RedeemResult": {
+            "type": "object",
+            "properties": {
+                "client_key": {
+                    "description": "ClientKey is the API key of a remote invite; it is shown once.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/p2p.ClientKey"
+                        }
+                    ]
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "phrase": {
+                    "description": "Phrase is shown on both sides; the person compares them.",
+                    "type": "string"
+                },
+                "server": {
+                    "$ref": "#/definitions/p2p.ServerInfo"
+                }
+            }
+        },
+        "p2p.RegenerateIdentityRequest": {
+            "type": "object",
+            "properties": {
+                "confirm": {
+                    "description": "Confirm must be true: a new identity unpairs every device and remote.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.Relay": {
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "description": "Addr is a multiaddr that ends in /p2p/\u003crelay peer ID\u003e.",
+                    "type": "string"
+                },
+                "admins": {
+                    "type": "integer"
+                },
+                "checked_at": {
+                    "type": "string"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "limits": {
+                    "$ref": "#/definitions/p2p.RelayLimits"
+                },
+                "members": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "description": "Mode is gated, open, unclaimed or unknown.",
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is in_sync, out_of_sync, open, unclaimed, not_admin, denied,\nunreachable or checking.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.RelayCheck": {
+            "type": "object",
+            "properties": {
+                "admin_ok": {
+                    "type": "boolean"
+                },
+                "circuit_ok": {
+                    "type": "boolean"
+                },
+                "connected": {
+                    "type": "boolean"
+                },
+                "detail": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "in_sync": {
+                    "type": "boolean"
+                },
+                "relay": {
+                    "$ref": "#/definitions/p2p.Relay"
+                },
+                "reserved": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.RelayLimits": {
+            "type": "object",
+            "properties": {
+                "circuit_bytes": {
+                    "type": "integer"
+                },
+                "circuit_seconds": {
+                    "type": "integer"
+                },
+                "rate_bps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.RelayLimitsInfo": {
+            "type": "object",
+            "properties": {
+                "can_change": {
+                    "description": "CanChange is true when this server is an admin of a gated relay and\nmay change the limits.",
+                    "type": "boolean"
+                },
+                "ceiling": {
+                    "description": "Ceiling is the most a change may set for each limit; the operator of\nthe relay sets it. Zero means no ceiling. With a ceiling a limit\ncannot be removed either: a value above it, or zero, is refused with\nan error that names the ceiling.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/p2p.RelayLimits"
+                        }
+                    ]
+                },
+                "limits": {
+                    "$ref": "#/definitions/p2p.RelayLimits"
+                },
+                "restarted": {
+                    "description": "Restarted is true when the relay restarted its circuit service to\napply the change: it dropped its reservations and the paired devices\nreserve again within moments. A change of the bandwidth limit alone\nnever restarts it.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.RelayList": {
+            "type": "object",
+            "properties": {
+                "relays": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/p2p.Relay"
+                    }
+                }
+            }
+        },
+        "p2p.RelayPass": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "open": {
+                    "type": "boolean"
+                },
+                "pass": {
+                    "description": "Pass is true when the link carries a relay pass.",
+                    "type": "boolean"
+                },
+                "reason": {
+                    "description": "Reason is no_relay or relay_unreachable when there is no pass.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.RelayServiceInfo": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "description": "Reason says why it does not run: off, not_share, not_public.",
+                    "type": "string"
+                },
+                "running": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.RenameDeviceRequest": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.RevokeResult": {
+            "type": "object",
+            "properties": {
+                "revoked": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "p2p.ServerInfo": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.SetRelayLimitsRequest": {
+            "type": "object",
+            "properties": {
+                "circuit_bytes": {
+                    "description": "CircuitBytes is the data one circuit may carry in each direction.",
+                    "type": "integer"
+                },
+                "circuit_seconds": {
+                    "description": "CircuitSeconds is the time one circuit may stay open.",
+                    "type": "integer"
+                },
+                "rate_bps": {
+                    "description": "RateBPS is the bandwidth of one circuit in each direction, in bytes\nper second.",
+                    "type": "integer"
+                }
+            }
+        },
+        "p2p.SplitNodeRelay": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "relays": {
+                    "description": "Relays is the state on each gated relay that this server administers.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/p2p.SplitRelayAdmission"
+                    }
+                },
+                "state": {
+                    "description": "State is admitted, refused, pending or not_needed.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.SplitRelayAdmission": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "relay_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is admitted, refused or pending.",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.SplitWorkerList": {
+            "type": "object",
+            "properties": {
+                "distributed": {
+                    "description": "Distributed is true in a cluster: models run on the backend nodes, so\na worker is used only when it is attached to one (node_id).",
+                    "type": "boolean"
+                },
+                "memory_in_use": {
+                    "description": "MemoryInUse is the memory of the workers in use, in bytes.",
+                    "type": "integer"
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/p2p.SplitWorkerView"
+                    }
+                }
+            }
+        },
+        "p2p.SplitWorkerUpdate": {
+            "type": "object",
+            "properties": {
+                "allow_slow_path": {
+                    "description": "AllowSlowPath uses the worker over a relayed path (\"Use anyway\"), or\nstops using it there.",
+                    "type": "boolean"
+                },
+                "node_id": {
+                    "description": "NodeID attaches the worker to a backend node of the cluster, or to\nthis server with \"\".",
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.SplitWorkerView": {
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "description": "Addr is the loopback address that reaches the worker, on this server\nor on the node of NodeID: an entry of LLAMACPP_GRPC_SERVERS, or of the\nMLX hostfile.",
+                    "type": "string"
+                },
+                "allow_slow_path": {
+                    "description": "AllowSlowPath is the \"Use anyway\" choice for a relayed path.",
+                    "type": "boolean"
+                },
+                "connected_since": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "engine": {
+                    "description": "Engine is llama (llama.cpp RPC) or mlx.",
+                    "type": "string"
+                },
+                "error": {
+                    "description": "Error says why a refused worker was refused.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "memory_bytes": {
+                    "description": "MemoryBytes is the memory the worker reported: its VRAM, or its RAM\nwhen it has no GPU (unified memory on Apple Silicon).",
+                    "type": "integer"
+                },
+                "name": {
+                    "description": "Name and Version are what the worker reported.",
+                    "type": "string"
+                },
+                "node_id": {
+                    "description": "NodeID is the backend node the worker is attached to; empty means\nthis server. NodeName is its name. The state, path and address of an\nattached worker are what the node last reported.",
+                    "type": "string"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "node_note": {
+                    "description": "NodeNote says why a worker attached to no node was detached, for\nexample because its node stopped being a split server.",
+                    "type": "string"
+                },
+                "node_offline": {
+                    "description": "NodeOffline is true when the node of NodeID is offline: the worker\nstays attached and waits for it; nothing moves it.",
+                    "type": "boolean"
+                },
+                "node_relay": {
+                    "description": "NodeRelay says whether the gated relays of this server admit the node\nof NodeID, so that the worker can reach it through them when no direct\nor hole-punched path works. Set only for a worker attached to a node.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/p2p.SplitNodeRelay"
+                        }
+                    ]
+                },
+                "own_relay": {
+                    "description": "OwnRelay is true when that relay is a gated relay this server\nadministers: its limits can change. With a data or time limit the\nrelay ends each connection at the limit, also after allow_slow_path.",
+                    "type": "boolean"
+                },
+                "path": {
+                    "$ref": "#/definitions/p2p.PathView"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "rank": {
+                    "description": "Rank is the MLX rank of the worker; zero when not in the ring.",
+                    "type": "integer"
+                },
+                "relay_id": {
+                    "description": "RelayID is the server's ID of the relay of a relayed path, when the\nrelay is one the server knows (see /api/p2p/relays/{id}/limits).",
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is online (in use), offline, slow (only a relay reaches it: it\nwaits for allow_slow_path), limited (only a public relay reaches it,\nwhose limits cannot carry model layers) or refused.",
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "p2p.Status": {
+            "type": "object",
+            "properties": {
+                "addrs": {
+                    "description": "Addrs are the addresses of the host, each with /p2p/\u003cpeer ID\u003e.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "devices": {
+                    "description": "Devices is the number of active paired devices.",
+                    "type": "integer"
+                },
+                "enabled": {
+                    "description": "Enabled is true when the mode is not off.",
+                    "type": "boolean"
+                },
+                "error": {
+                    "description": "Error says why the host does not run although the mode asks for it.",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode is the mode in effect: off, connect or share.",
+                    "type": "string"
+                },
+                "peer_id": {
+                    "description": "PeerID is the peer ID of this server; empty when the host does not run.",
+                    "type": "string"
+                },
+                "pending_invites": {
+                    "description": "PendingInvites is the number of invites that can still be redeemed.",
+                    "type": "integer"
+                },
+                "public_dht": {
+                    "$ref": "#/definitions/p2p.PublicDHTInfo"
+                },
+                "reachability": {
+                    "description": "Reachability is unknown, public or private.",
+                    "type": "string"
+                },
+                "relay_service": {
+                    "description": "RelayService says whether this server relays for its paired devices.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/p2p.RelayServiceInfo"
+                        }
+                    ]
+                },
+                "reservations": {
+                    "description": "Reservations are the peer IDs of the relays that hold a reservation for\nthis server.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "running": {
+                    "description": "Running is true when the host runs.",
+                    "type": "boolean"
+                }
+            }
+        },
         "proposals.Event": {
             "type": "object",
             "properties": {
@@ -25736,6 +28336,135 @@ const docTemplate = `{
                 }
             }
         },
+        "remotes.FederationView": {
+            "type": "object",
+            "properties": {
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remotes.Group"
+                    }
+                },
+                "instances": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remotes.Instance"
+                    }
+                }
+            }
+        },
+        "remotes.Group": {
+            "type": "object",
+            "properties": {
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remotes.GroupMember"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "policy": {
+                    "$ref": "#/definitions/config.FailoverPolicy"
+                },
+                "state": {
+                    "description": "State is the state of the chain: primary, fallback or degraded. Empty\nwhen the failover manager does not know it yet.",
+                    "type": "string"
+                }
+            }
+        },
+        "remotes.GroupMember": {
+            "type": "object",
+            "properties": {
+                "constrained": {
+                    "description": "Constrained is true when the target is reached through a relay that\nlimits the connection: it takes a request only when no other can.",
+                    "type": "boolean"
+                },
+                "drained": {
+                    "type": "boolean"
+                },
+                "in_flight": {
+                    "description": "InFlight counts the requests of this server that the target serves.",
+                    "type": "integer"
+                },
+                "instance": {
+                    "description": "Instance is the id of the instance that serves the model: LocalInstance,\na remote id, or empty for a model of another proxy.",
+                    "type": "string"
+                },
+                "instance_name": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is the health of the target: healthy, down, recovering or\nmissing. Empty when the failover manager does not know it yet.",
+                    "type": "string"
+                },
+                "upstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "remotes.Instance": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "ID is LocalInstance or the id of the remote.",
+                    "type": "string"
+                },
+                "in_flight": {
+                    "description": "InFlight counts the requests of this server that the instance serves\nnow through a group.",
+                    "type": "integer"
+                },
+                "local": {
+                    "type": "boolean"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remotes.InstanceModel"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "p2p": {
+                    "description": "P2P is the tunnel of a remote over P2P.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/remotes.P2PInfo"
+                        }
+                    ]
+                },
+                "status": {
+                    "$ref": "#/definitions/remotes.Status"
+                },
+                "transport": {
+                    "$ref": "#/definitions/remotes.Transport"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "remotes.InstanceModel": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "description": "Model is the name of the model config on this server.",
+                    "type": "string"
+                },
+                "upstream_id": {
+                    "description": "UpstreamID is the model id at the instance. For this server it is\nthe model name.",
+                    "type": "string"
+                }
+            }
+        },
         "remotes.Kind": {
             "type": "string",
             "enum": [
@@ -25748,6 +28477,38 @@ const docTemplate = `{
                 "KindOpenAI",
                 "KindAnthropic"
             ]
+        },
+        "remotes.P2PInfo": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "description": "Error is the last dial or listen error, for a person to read.",
+                    "type": "string"
+                },
+                "limited": {
+                    "description": "Limited is true when the relay of a relayed path limits the data or\nthe time of the connection.",
+                    "type": "boolean"
+                },
+                "local_port": {
+                    "description": "LocalPort is the loopback port of the forwarder. The entries of the\nremote use http://127.0.0.1:\u003cLocalPort\u003e as their upstream address.",
+                    "type": "integer"
+                },
+                "path": {
+                    "description": "Path is how the last request reached the server: direct,\nhole_punched or relayed. Empty before the first request.",
+                    "type": "string"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is off (P2P is off on this server), listening (no request went\nthrough yet), up, down or error (the port could not be opened).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/remotes.TunnelState"
+                        }
+                    ]
+                }
+            }
         },
         "remotes.Remote": {
             "type": "object",
@@ -25784,8 +28545,24 @@ const docTemplate = `{
                         "$ref": "#/definitions/remotes.UpstreamModel"
                     }
                 },
+                "p2p": {
+                    "description": "P2P is the tunnel of a remote over P2P. It is the state of this\nserver's forwarder, not of the shared store.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/remotes.P2PInfo"
+                        }
+                    ]
+                },
                 "status": {
                     "$ref": "#/definitions/remotes.Status"
+                },
+                "transport": {
+                    "description": "Transport is \"p2p\" for a remote over P2P and absent otherwise.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/remotes.Transport"
+                        }
+                    ]
                 },
                 "unavailable": {
                     "description": "subset of Entries the upstream no longer lists",
@@ -25846,6 +28623,32 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "remotes.Transport": {
+            "type": "string",
+            "enum": [
+                "p2p"
+            ],
+            "x-enum-varnames": [
+                "TransportP2P"
+            ]
+        },
+        "remotes.TunnelState": {
+            "type": "string",
+            "enum": [
+                "off",
+                "listening",
+                "up",
+                "down",
+                "error"
+            ],
+            "x-enum-varnames": [
+                "TunnelOff",
+                "TunnelListening",
+                "TunnelUp",
+                "TunnelDown",
+                "TunnelError"
+            ]
         },
         "remotes.UpstreamModel": {
             "type": "object",
@@ -36489,26 +39292,6 @@ const docTemplate = `{
                 }
             }
         },
-        "schema.NodeData": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string"
-                },
-                "lastSeen": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "serviceID": {
-                    "type": "string"
-                },
-                "tunnelAddress": {
-                    "type": "string"
-                }
-            }
-        },
         "schema.ORAnnotation": {
             "type": "object",
             "properties": {
@@ -37374,29 +40157,6 @@ const docTemplate = `{
                 "truncation": {
                     "description": "\"auto\"|\"disabled\"",
                     "type": "string"
-                }
-            }
-        },
-        "schema.P2PNodesResponse": {
-            "type": "object",
-            "properties": {
-                "federated_nodes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/schema.NodeData"
-                    }
-                },
-                "llama_cpp_nodes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/schema.NodeData"
-                    }
-                },
-                "mlx_nodes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/schema.NodeData"
-                    }
                 }
             }
         },

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/mudler/LocalAI/core/services/storage"
 	"github.com/mudler/LocalAI/core/services/workerctl"
@@ -36,6 +37,9 @@ type modelPrefetcher struct {
 	// validateURL refuses a URI the worker must not fetch. Nil allows every
 	// URI that passes the scheme check of stage.
 	validateURL func(uri string) error
+	// mu keeps one request at a time on every carrier: the HTTP control
+	// plane delivers the requests of a verb concurrently, NATS one by one.
+	mu sync.Mutex
 }
 
 func newModelPrefetcher(cfg *Config) *modelPrefetcher {
@@ -75,7 +79,7 @@ func (p *modelPrefetcher) register(srv controlServer) error {
 	// come in order (stage, then commit or discard), and a request queued
 	// behind a long download times out on the frontend, which then sends the
 	// files itself at the next load.
-	return srv.handle(verbModelPrefetch, unary(decodeJSON[workerctl.ModelPrefetchRequest], refuseModelPrefetch, p.serve))
+	return srv.handle(verbModelPrefetch, unary(decodeJSON[workerctl.ModelPrefetchRequest], refuseModelPrefetch, p.serveOne))
 }
 
 func refuseModelPrefetch(err error) workerctl.ModelPrefetchReply {
@@ -97,6 +101,13 @@ func (p *modelPrefetcher) places(model, filename string) ([]string, error) {
 	key := cacheKey(model, filename)
 	cachePlace := filepath.Join(p.cacheDir, filepath.FromSlash(key))
 	return []string{cachePlace, httpPlace}, nil
+}
+
+// serveOne is serve, one request at a time.
+func (p *modelPrefetcher) serveOne(ctx context.Context, req workerctl.ModelPrefetchRequest) workerctl.ModelPrefetchReply {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.serve(ctx, req)
 }
 
 func (p *modelPrefetcher) serve(ctx context.Context, req workerctl.ModelPrefetchRequest) workerctl.ModelPrefetchReply {

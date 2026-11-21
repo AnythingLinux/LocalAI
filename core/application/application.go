@@ -247,11 +247,13 @@ type Application struct {
 	admissionLimiter  *admission.Limiter
 	failoverManager   *failover.Manager
 	remotes           remotes.Service
+	federation        remotes.Federation
 	watchdogMutex     sync.Mutex
 	watchdogStop      chan bool
-	p2pMutex          sync.Mutex
-	p2pCtx            context.Context
-	p2pCancel         context.CancelFunc
+
+	// p2pNet is the P2P layer (p2pnet); see p2pnet.go.
+	p2pNetOnce sync.Once
+	p2pNet     *p2pNet
 
 	// remotesStop cancels the startup refresh of the remotes and waits for it.
 	remotesStop func()
@@ -742,6 +744,7 @@ func (a *Application) Shutdown() error {
 		if a.remotesStop != nil {
 			a.remotesStop()
 		}
+		a.StopP2PNet()
 		// A chat worker stops taking starts first: a start that arrived now
 		// would meet a closing service. Its running turns end as interrupted.
 		a.stopChatWorker()
@@ -952,6 +955,9 @@ func (a *Application) start() (startErr error) {
 	if a.distributed != nil && a.distributed.Unloader != nil {
 		assistantClient.LoadStopper = a.distributed.Unloader
 	}
+	if a.distributed != nil && a.distributed.Switch != nil {
+		assistantClient.Carrier = a.distributed.Switch
+	}
 	// PII filter — same nil-or-real wiring.
 	assistantClient.PIIRedactor = a.piiRedactor
 	assistantClient.PIIEvents = a.piiEvents
@@ -1003,8 +1009,8 @@ func (a *Application) StartCollections() {
 		if d.Registry != nil {
 			a.waitForHealthyWorker()
 		}
-		if d.Nats != nil {
-			bus = d.Nats
+		if d.Broadcaster != nil {
+			bus = d.Broadcaster
 		}
 	}
 	svc, err := collections.New(a.applicationConfig, bus, a.collectionsOptions()...)

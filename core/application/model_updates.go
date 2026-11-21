@@ -73,8 +73,9 @@ func (a *Application) startModelUpdates() {
 		upgrader.StrategyNote = clusterStrategyNote(ds.Registry)
 		// With one shared models directory the workers load the frontend's
 		// files from it: there is nothing to move.
-		if !options.Distributed.SharedModels && ds.Nats != nil {
-			files := &nodes.UpgradeFiles{Nodes: ds.Registry, Sender: nodes.NATSModelFilePrefetcher{Bus: ds.Nats}}
+		sender, _ := ds.Unloader.(nodes.ModelFilePrefetcher)
+		if !options.Distributed.SharedModels && sender != nil {
+			files := &nodes.UpgradeFiles{Nodes: ds.Registry, Sender: sender}
 			if ds.FileMgr != nil && ds.FileMgr.IsConfigured() {
 				files.Objects = ds.FileMgr
 			}

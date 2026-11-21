@@ -118,7 +118,12 @@ func (v *fileStagingVerbs) ensure(ctx context.Context, req workerctl.FileEnsureR
 		mu, _ := v.keyLocks.LoadOrStore(req.Key, &sync.Mutex{})
 		mu.(*sync.Mutex).Lock()
 		defer mu.(*sync.Mutex).Unlock()
-		return ensureWorkerFile(ctx, v.fm, v.capacity, req.Key, req.SHA256)
+		// The download is shared by every caller of this key. It must not end
+		// when the caller that happened to start it goes away: the others wait
+		// for the same result, and a carrier with a request context (HTTP)
+		// cancels that context when its caller leaves. The NATS server passes a
+		// context that never ends.
+		return ensureWorkerFile(context.WithoutCancel(ctx), v.fm, v.capacity, req.Key, req.SHA256)
 	})
 	if err != nil {
 		xlog.Error("File ensure failed", "key", req.Key, "error", err)

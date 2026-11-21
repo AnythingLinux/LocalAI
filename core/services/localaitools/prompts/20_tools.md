@@ -35,6 +35,14 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `get_router_corpus_stats` — Inspect a KNN router corpus by count and label only; exemplar texts are never returned.
 - `list_aliases` — List configured model aliases and their targets.
 - `list_failover_chains` — List failover chains, their active target and target health.
+- `get_cluster_carrier` — Read which transport a distributed cluster uses (NATS or the database tunnel), the state of a change, the live frontends and the workers that cannot follow. Read-only. No tool changes the carrier.
+- `get_p2p_status` — Show the P2P mode (off, connect, share), peer ID, reachability and counts.
+- `list_p2p_devices` — List the paired P2P devices and how each one is connected.
+- `list_p2p_invites` — List the P2P invites and their state, never the links.
+- `list_p2p_relays` — List the P2P relays and their sync state.
+- `list_federation` — List the LocalAI instances (this server and LocalAI remotes) and the federation groups with member health and load.
+- `list_p2p_split_workers` — List the model-split workers (llama.cpp RPC, MLX), their state, path and memory.
+- `get_p2p_relay_limits` — Read the data, time and bandwidth limits of one circuit on a P2P relay, the ceiling the relay operator set for each, and whether this server may change them.
 
 ## Mutating (require user confirmation per safety rule 1)
 
@@ -67,3 +75,10 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `delete_scheduling` — Remove a distributed per-model scheduling config.
 - `pin_failover_target` — Force a failover chain to one target.
 - `unpin_failover_target` — Remove a failover pin.
+- `revoke_p2p_device` — Revoke a paired P2P device; it is cut off at once.
+- `cancel_p2p_invite` — Cancel a pending P2P invite.
+- `manage_federation_group` — Create, update or delete a federation group, or drain or undrain one member.
+- `set_p2p_split_slow_path` — Use a model-split worker over a relay ("Use anyway"), or stop; a relay of the user with limits cuts each connection at them.
+- `set_p2p_split_node` — Attach a model-split worker to a backend node of the cluster, or to this server; pin the model to that node.
+- `set_node_split_server` — Declare a backend node a split server so model-split workers can be attached to it, or clear it (detaches its workers, stops its P2P host).
+- `set_p2p_relay_limits` — Change the data, time or bandwidth limit of one circuit on a P2P relay this server administers, up to the relay's ceiling (a value above it is refused); a new data or time limit restarts the relay's circuit service.

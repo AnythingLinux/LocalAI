@@ -820,6 +820,21 @@ export const settingsApi = {
   save: (body) => postJSON(API_CONFIG.endpoints.settings, body),
 }
 
+// P2P relays and identity (the P2P settings page). Status, invites and devices
+// are in their own block.
+export const p2pRelaysApi = {
+  status: () => fetchJSON(API_CONFIG.endpoints.p2pStatus),
+  list: () => fetchJSON(API_CONFIG.endpoints.p2pRelays),
+  add: (addr, label = '', claimCode = '') => postJSON(API_CONFIG.endpoints.p2pRelays, { addr, label, ...(claimCode ? { claim_code: claimCode } : {}) }),
+  remove: (id) => fetchJSON(API_CONFIG.endpoints.p2pRelay(id), { method: 'DELETE' }),
+  check: (id) => postJSON(API_CONFIG.endpoints.p2pRelayCheck(id), {}),
+  sync: (id) => postJSON(API_CONFIG.endpoints.p2pRelaySync(id), {}),
+  claim: (id, code) => postJSON(API_CONFIG.endpoints.p2pRelayClaim(id), { code }),
+  limits: (id) => fetchJSON(API_CONFIG.endpoints.p2pRelayLimits(id)),
+  setLimits: (id, body) => fetchJSON(API_CONFIG.endpoints.p2pRelayLimits(id), { method: 'PUT', body: JSON.stringify(body) }),
+  regenerateIdentity: () => postJSON(API_CONFIG.endpoints.p2pIdentityRegenerate, { confirm: true }),
+}
+
 // Branding / whitelabeling
 // /api/branding is public (no auth) — the login page reads it before the
 // user signs in. Asset uploads/deletes still require admin privileges.
@@ -891,16 +906,35 @@ export const metricsApi = {
   },
 }
 
-// P2P API
-export const p2pApi = {
-  getWorkers: () => fetchJSON(API_CONFIG.endpoints.p2pWorkers),
-  getFederation: () => fetchJSON(API_CONFIG.endpoints.p2pFederation),
-  getStats: () => fetchJSON(API_CONFIG.endpoints.p2pStats),
-  getToken: async () => {
-    const response = await fetch(apiUrl(API_CONFIG.endpoints.p2pToken))
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return response.text()
-  },
+// P2P layer: status, invites and paired devices (admin). Invites and devices
+// answer 409 outside mode "share". The invite link is in the mint answer only.
+export const p2pNetApi = {
+  status: () => fetchJSON(API_CONFIG.endpoints.p2pStatus),
+  mintInvite: (body) => postJSON(API_CONFIG.endpoints.p2pInvites, body),
+  invites: () => fetchJSON(API_CONFIG.endpoints.p2pInvites),
+  cancelInvite: (id) => fetchJSON(API_CONFIG.endpoints.p2pInvite(id), { method: 'DELETE' }),
+  devices: () => fetchJSON(API_CONFIG.endpoints.p2pDevices),
+  revokeDevice: (id) => fetchJSON(API_CONFIG.endpoints.p2pDevice(id), { method: 'DELETE' }),
+}
+
+// Federation (admin): the instances that can serve a group and the groups,
+// each one model name served by several instances.
+export const federationApi = {
+  get: () => fetchJSON(API_CONFIG.endpoints.federation),
+  create: (body) => postJSON(API_CONFIG.endpoints.federationGroups, body),
+  update: (name, body) => fetchJSON(API_CONFIG.endpoints.federationGroup(name), { method: 'PATCH', body: JSON.stringify(body) }),
+  remove: (name) => fetchJSON(API_CONFIG.endpoints.federationGroup(name), { method: 'DELETE' }),
+  drain: (name, model, drain) => postJSON(API_CONFIG.endpoints.federationDrain(name), { model, drain }),
+}
+
+// Model-split workers: llama.cpp RPC and MLX workers that lend their memory to
+// models on this server, or on the cluster node each is attached to. Answers
+// 409 outside mode "share".
+export const p2pSplitApi = {
+  list: () => fetchJSON(API_CONFIG.endpoints.p2pSplitWorkers),
+  setSlowPath: (id, allow) => fetchJSON(API_CONFIG.endpoints.p2pSplitWorker(id), { method: 'PATCH', body: JSON.stringify({ allow_slow_path: allow }) }),
+  // nodeId '' attaches the worker to this instance.
+  setNode: (id, nodeId) => fetchJSON(API_CONFIG.endpoints.p2pSplitWorker(id), { method: 'PATCH', body: JSON.stringify({ node_id: nodeId }) }),
 }
 
 // Image generation
@@ -1234,6 +1268,21 @@ export const failoverApi = {
 }
 
 // Nodes API (distributed)
+// Admin API of the cluster transport (the active carrier and its settings).
+// `switchCarrier` answers 202 with the new row, 422 with `blockers` in the body
+// when the preflight refuses, and 409 when a change is already under way.
+export const clusterApi = {
+  carrier: () => fetchJSON(API_CONFIG.endpoints.clusterCarrier),
+  dryRun: (target) => postJSON(API_CONFIG.endpoints.clusterCarrier, { target, dry_run: true }),
+  switchCarrier: (target, force = false) => postJSON(API_CONFIG.endpoints.clusterCarrier, { target, force }),
+  abort: () => postJSON(API_CONFIG.endpoints.clusterCarrier, { abort: true }),
+  settings: () => fetchJSON(API_CONFIG.endpoints.clusterSettings),
+  saveSettings: (settings) => fetchJSON(API_CONFIG.endpoints.clusterSettings, {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  }),
+}
+
 export const nodesApi = {
   list: () => fetchJSON(API_CONFIG.endpoints.nodes),
   get: (id) => fetchJSON(API_CONFIG.endpoints.node(id)),
@@ -1276,6 +1325,13 @@ export const nodesApi = {
   }),
   resetMaxReplicasPerModel: (id) => fetchJSON(API_CONFIG.endpoints.nodeMaxReplicasPerModel(id), {
     method: 'DELETE',
+  }),
+  // Declare a node a split server (it may serve model-split workers), or
+  // clear it, which detaches its workers. An explicit admin action only.
+  setSplitServer: (id, on) => fetchJSON(API_CONFIG.endpoints.nodeSplitServer(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ split_server: on }),
   }),
   // Set a sticky admin override for the per-node VRAM allocation budget. The
   // value is a string ("80%" or "12GB"); resolution to a byte ceiling happens

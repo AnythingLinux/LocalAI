@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	p2papi "github.com/mudler/LocalAI/core/http/endpoints/p2p"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"github.com/mudler/LocalAI/core/http/auth"
 	"github.com/mudler/LocalAI/core/schema"
 	"github.com/mudler/LocalAI/core/services/backendupdates"
+	"github.com/mudler/LocalAI/core/services/cluster"
 	"github.com/mudler/LocalAI/core/services/failover"
 	"github.com/mudler/LocalAI/core/services/galleryop"
 	localaitools "github.com/mudler/LocalAI/core/services/localaitools"
@@ -31,6 +33,7 @@ import (
 	"github.com/mudler/LocalAI/core/services/modelupdates"
 	"github.com/mudler/LocalAI/core/services/nodes"
 	"github.com/mudler/LocalAI/core/services/nodes/prefixcache"
+	"github.com/mudler/LocalAI/core/services/remotes"
 	"github.com/mudler/LocalAI/core/services/routing/billing"
 	"github.com/mudler/LocalAI/core/services/routing/corpus"
 	"github.com/mudler/LocalAI/core/services/routing/pii"
@@ -120,6 +123,26 @@ type Client struct {
 	// running" — the same as a deployment with no failover chains
 	// configured.
 	Failover *failover.Manager
+
+	// Carrier backs get_cluster_carrier. nil on a frontend that is not
+	// distributed, where the tool reports distributed=false.
+	Carrier CarrierStatusSource
+
+	// P2P backs the P2P tools. nil makes them report that P2P is not
+	// available.
+	P2P p2papi.Service
+
+	// Federation backs list_federation and manage_federation_group. nil
+	// makes them report that federation is not available.
+	Federation remotes.Federation
+	// P2PSplit backs the model-split worker tools. nil makes them report
+	// that P2P is not available.
+	P2PSplit p2papi.SplitService
+	// SplitDetacher detaches the split workers of a node whose split server
+	// declaration was cleared. nil leaves it to the next reload.
+	SplitDetacher interface {
+		DetachSplitWorkers(ctx context.Context, nodeID string) (int, error)
+	}
 
 	// SharedFolders backs the shared folder tools. It is read at each call,
 	// because the chats start after the assistant; nil or a nil service makes
@@ -979,6 +1002,29 @@ func (c *Client) DeleteScheduling(ctx context.Context, modelName string) error {
 	return c.NodeRegistry.DeleteModelScheduling(ctx, modelName)
 }
 
+func (c *Client) SetNodeSplitServer(ctx context.Context, nodeID string, on bool) (*localaitools.NodeSplitServer, error) {
+	if c.NodeRegistry == nil {
+		return nil, errors.New("split servers are only available in distributed mode")
+	}
+	n, err := c.NodeRegistry.Get(ctx, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("node %s not found", nodeID)
+	}
+	if n.NodeType == nodes.NodeTypeAgent {
+		return nil, errors.New("an agent node runs no models, so it cannot be a split server")
+	}
+	if err := c.NodeRegistry.SetSplitServer(ctx, nodeID, on); err != nil {
+		return nil, err
+	}
+	out := &localaitools.NodeSplitServer{NodeID: nodeID, SplitServer: on}
+	if !on && c.SplitDetacher != nil {
+		if out.Detached, err = c.SplitDetacher.DetachSplitWorkers(ctx, nodeID); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
 func (c *Client) SetNodeVRAMBudget(_ context.Context, _, _ string) error {
 	// The node registry is a distributed-mode concern owned by the Application
 	// layer and is not wired into the in-process client (which also returns an
@@ -1409,6 +1455,166 @@ func (c *Client) ClearRouterCorpus(ctx context.Context, routerModel string) (*lo
 	return &localaitools.RouterCorpusClearResult{Router: cfg.Name, Cleared: cleared}, nil
 }
 
+// ---- Cluster carrier ----
+
+// CarrierStatusSource is what get_cluster_carrier reads. *cluster.Switch is one.
+type CarrierStatusSource interface {
+	Status(ctx context.Context) (cluster.Report, error)
+}
+
+func (c *Client) GetClusterCarrier(ctx context.Context) (*localaitools.ClusterCarrierStatus, error) {
+	if c.Carrier == nil {
+		return &localaitools.ClusterCarrierStatus{Distributed: false}, nil
+	}
+	rep, err := c.Carrier.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &localaitools.ClusterCarrierStatus{
+		Distributed:           true,
+		Active:                string(rep.Active),
+		State:                 string(rep.State),
+		Target:                string(rep.Target),
+		Epoch:                 rep.Epoch,
+		DrainRemainingSeconds: rep.DrainRemaining.Seconds(),
+	}
+	for _, r := range rep.Replicas {
+		out.Replicas = append(out.Replicas, localaitools.ClusterReplicaInfo{ID: r.ID, Version: r.Version, ReadyEpoch: r.ReadyEpoch, ReadyReason: r.ReadyReason})
+	}
+	for _, w := range rep.Workers {
+		attached := make([]string, 0, len(w.Attached))
+		for _, a := range w.Attached {
+			attached = append(attached, string(a))
+		}
+		out.Workers = append(out.Workers, localaitools.ClusterWorkerInfo{ID: w.ID, Name: w.Name, Attached: attached, CanFollow: w.CanFollow, Reason: w.Reason, FollowError: w.FollowError})
+	}
+	return out, nil
+}
+
+// ---- P2P ----
+
+var errNoP2P = errors.New("P2P is not available on this server")
+
+func (c *Client) GetP2PStatus(ctx context.Context) (*localaitools.P2PStatusInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	st, err := c.P2P.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &localaitools.P2PStatusInfo{
+		Mode: st.Mode, Running: st.Running, Error: st.Error, PeerID: st.PeerID, Addrs: st.Addrs,
+		Reachability: st.Reachability, RelayService: st.RelayService.Running,
+		PendingInvites: st.PendingInvites, Devices: st.Devices,
+	}, nil
+}
+
+func (c *Client) ListP2PDevices(ctx context.Context) ([]localaitools.P2PDeviceInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	devs, err := c.P2P.ListDevices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localaitools.P2PDeviceInfo, 0, len(devs))
+	for _, d := range devs {
+		out = append(out, localaitools.P2PDeviceInfo{
+			ID: d.ID, Kind: d.Kind, Label: d.Label, PeerID: d.PeerID, Status: d.Status, Online: d.Online,
+			Path: d.Path.Kind, RelayLabel: d.Path.RelayLabel, LastSeenAt: d.LastSeenAt,
+			Models: d.Models, AllModels: d.AllModels,
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) ListP2PInvites(ctx context.Context) ([]localaitools.P2PInviteInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	invs, err := c.P2P.ListInvites(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localaitools.P2PInviteInfo, 0, len(invs))
+	for _, i := range invs {
+		out = append(out, localaitools.P2PInviteInfo{
+			ID: i.ID, Kind: i.Kind, Label: i.Label, Status: i.Status, ExpiresAt: i.ExpiresAt, DeviceID: i.DeviceID,
+			Phrase: i.Phrase, RelayPass: i.RelayPass, Models: i.Models, AllModels: i.AllModels,
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) ListP2PRelays(ctx context.Context) ([]localaitools.P2PRelayInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	rs, err := c.P2P.ListRelays(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localaitools.P2PRelayInfo, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, localaitools.P2PRelayInfo{
+			ID: r.ID, Label: r.Label, Addr: r.Addr, Mode: r.Mode, State: r.State, Health: r.Health, Members: r.Members,
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) GetP2PRelayLimits(ctx context.Context, id string) (*localaitools.P2PRelayLimitsInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	info, err := c.P2P.RelayLimits(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return relayLimitsInfo(info), nil
+}
+
+func (c *Client) SetP2PRelayLimits(ctx context.Context, id string, req localaitools.SetP2PRelayLimitsRequest) (*localaitools.P2PRelayLimitsInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	info, err := c.P2P.SetRelayLimits(ctx, id, p2papi.SetRelayLimitsRequest{
+		CircuitBytes: req.CircuitBytes, CircuitSeconds: req.CircuitSeconds, RateBPS: req.RateBPS,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return relayLimitsInfo(info), nil
+}
+
+func relayLimitsInfo(i p2papi.RelayLimitsInfo) *localaitools.P2PRelayLimitsInfo {
+	return &localaitools.P2PRelayLimitsInfo{
+		CircuitBytes: i.Limits.CircuitBytes, CircuitSeconds: i.Limits.CircuitSeconds, RateBPS: i.Limits.RateBPS,
+		Ceiling:   localaitools.P2PRelayCeiling{CircuitBytes: i.Ceiling.CircuitBytes, CircuitSeconds: i.Ceiling.CircuitSeconds, RateBPS: i.Ceiling.RateBPS},
+		CanChange: i.CanChange, Restarted: i.Restarted,
+	}
+}
+
+func (c *Client) RevokeP2PDevice(ctx context.Context, id string) error {
+	if c.P2P == nil {
+		return errNoP2P
+	}
+	// The assistant acts for the administrator of the chat.
+	by := ""
+	if u := localaitools.UserFromContext(ctx); u != nil {
+		by = u.ID
+	}
+	return c.P2P.RevokeDevice(ctx, id, by)
+}
+
+func (c *Client) CancelP2PInvite(ctx context.Context, id string) error {
+	if c.P2P == nil {
+		return errNoP2P
+	}
+	return c.P2P.CancelInvite(ctx, id)
+}
+
 // ---- Failover chains ----
 
 func (c *Client) ListFailoverChains(_ context.Context) ([]localaitools.FailoverChainInfo, error) {
@@ -1691,4 +1897,135 @@ func (c *Client) SetChatEgressCeiling(ctx context.Context, ceiling string) (*loc
 	}
 	c.AppConfig.ChatsEgressCeiling = ceiling
 	return c.GetChatEgress(ctx)
+}
+
+func splitInfo(w p2papi.SplitWorkerView) localaitools.P2PSplitWorkerInfo {
+	info := localaitools.P2PSplitWorkerInfo{
+		ID: w.ID, Label: w.Label, Engine: w.Engine, State: w.State, Error: w.Error,
+		AllowSlowPath: w.AllowSlowPath, Path: w.Path.Kind, RelayLabel: w.Path.RelayLabel, RelayID: w.RelayID,
+		OwnRelay: w.OwnRelay, MemoryBytes: w.MemoryBytes, NodeID: w.NodeID, NodeName: w.NodeName,
+		NodeOffline: w.NodeOffline, NodeNote: w.NodeNote,
+	}
+	if w.NodeRelay != nil {
+		info.NodeRelay, info.NodeRelayReason = w.NodeRelay.State, w.NodeRelay.Reason
+	}
+	return info
+}
+
+func (c *Client) ListP2PSplitWorkers(ctx context.Context) ([]localaitools.P2PSplitWorkerInfo, error) {
+	if c.P2PSplit == nil {
+		return nil, errNoP2P
+	}
+	list, err := c.P2PSplit.ListSplitWorkers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localaitools.P2PSplitWorkerInfo, 0, len(list.Workers))
+	for _, w := range list.Workers {
+		out = append(out, splitInfo(w))
+	}
+	return out, nil
+}
+
+func (c *Client) SetP2PSplitSlowPath(ctx context.Context, id string, allow bool) (*localaitools.P2PSplitWorkerInfo, error) {
+	if c.P2PSplit == nil {
+		return nil, errNoP2P
+	}
+	w, err := c.P2PSplit.SetSplitWorker(ctx, id, p2papi.SplitWorkerUpdate{AllowSlowPath: &allow})
+	if err != nil {
+		return nil, err
+	}
+	info := splitInfo(w)
+	return &info, nil
+}
+
+func (c *Client) SetP2PSplitNode(ctx context.Context, id, nodeID string) (*localaitools.P2PSplitWorkerInfo, error) {
+	if c.P2PSplit == nil {
+		return nil, errNoP2P
+	}
+	w, err := c.P2PSplit.SetSplitWorker(ctx, id, p2papi.SplitWorkerUpdate{NodeID: &nodeID})
+	if err != nil {
+		return nil, err
+	}
+	info := splitInfo(w)
+	return &info, nil
+}
+
+// ---- Federation ----
+
+var errNoFederation = errors.New("federation is not available on this server: the remote store could not be opened")
+
+func (c *Client) GetFederation(ctx context.Context) (*localaitools.FederationInfo, error) {
+	if c.Federation == nil {
+		return nil, errNoFederation
+	}
+	v, err := c.Federation.View(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &localaitools.FederationInfo{Instances: []localaitools.FederationInstanceInfo{}, Groups: []localaitools.FederationGroupInfo{}}
+	for _, in := range v.Instances {
+		info := localaitools.FederationInstanceInfo{
+			ID: in.ID, Name: in.Name, Local: in.Local, Transport: string(in.Transport), Status: string(in.Status),
+			InFlight: in.InFlight, Models: []localaitools.FederationModelInfo{},
+		}
+		if in.P2P != nil {
+			info.P2P = &localaitools.FederationP2PInfo{PeerID: in.P2P.PeerID, State: string(in.P2P.State), Path: in.P2P.Path, Limited: in.P2P.Limited}
+		}
+		for _, m := range in.Models {
+			info.Models = append(info.Models, localaitools.FederationModelInfo{Model: m.Model, UpstreamID: m.UpstreamID})
+		}
+		out.Instances = append(out.Instances, info)
+	}
+	for _, g := range v.Groups {
+		out.Groups = append(out.Groups, federationGroupInfo(g))
+	}
+	return out, nil
+}
+
+func federationGroupInfo(g remotes.Group) localaitools.FederationGroupInfo {
+	info := localaitools.FederationGroupInfo{Name: g.Name, Policy: string(g.Policy), State: g.State, Members: []localaitools.FederationMemberInfo{}}
+	for _, m := range g.Members {
+		info.Members = append(info.Members, localaitools.FederationMemberInfo{
+			Model: m.Model, Instance: m.Instance, InstanceName: m.InstanceName, Drained: m.Drained,
+			State: m.State, InFlight: m.InFlight, Constrained: m.Constrained, LastError: m.LastError,
+		})
+	}
+	return info
+}
+
+func (c *Client) ManageFederationGroup(ctx context.Context, req localaitools.FederationGroupAction) (*localaitools.FederationGroupInfo, error) {
+	if c.Federation == nil {
+		return nil, errNoFederation
+	}
+	var (
+		g   remotes.Group
+		err error
+	)
+	switch req.Action {
+	case localaitools.FederationActionCreate:
+		g, err = c.Federation.CreateGroup(ctx, remotes.GroupRequest{Name: req.Name, Policy: config.FailoverPolicy(req.Policy), Members: req.Members})
+	case localaitools.FederationActionUpdate:
+		up := remotes.GroupUpdate{}
+		if req.Policy != "" {
+			p := config.FailoverPolicy(req.Policy)
+			up.Policy = &p
+		}
+		if req.Members != nil {
+			m := req.Members
+			up.Members = &m
+		}
+		g, err = c.Federation.UpdateGroup(ctx, req.Name, up)
+	case localaitools.FederationActionDelete:
+		return nil, c.Federation.DeleteGroup(ctx, req.Name)
+	case localaitools.FederationActionDrain, localaitools.FederationActionUndrain:
+		g, err = c.Federation.Drain(ctx, req.Name, req.Model, req.Action == localaitools.FederationActionDrain)
+	default:
+		return nil, fmt.Errorf("unknown federation action %q", req.Action)
+	}
+	if err != nil {
+		return nil, err
+	}
+	info := federationGroupInfo(g)
+	return &info, nil
 }

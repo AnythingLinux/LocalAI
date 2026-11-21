@@ -694,6 +694,9 @@ func (c *Client) ListNodes(ctx context.Context) ([]localaitools.Node, error) {
 		Address     string `json:"address"`
 		HTTPAddress string `json:"http_address"`
 		Status      string `json:"status"`
+		Attached    string `json:"attached"`
+		PeerID      string `json:"peer_id"`
+		SplitServer bool   `json:"split_server"`
 	}
 	if err := c.do(ctx, http.MethodGet, routeNodes, nil, &raw); err != nil {
 		// Treat 404/disabled as "no nodes" to keep parity with single-process.
@@ -709,6 +712,9 @@ func (c *Client) ListNodes(ctx context.Context) ([]localaitools.Node, error) {
 			Address:     n.Address,
 			HTTPAddress: n.HTTPAddress,
 			Healthy:     n.Status == "healthy",
+			Route:       localaitools.NodeRoute(strings.Split(n.Attached, ","), n.PeerID),
+			PeerID:      n.PeerID,
+			SplitServer: n.SplitServer,
 		})
 	}
 	return out, nil
@@ -755,6 +761,15 @@ func (c *Client) DeleteScheduling(ctx context.Context, modelName string) error {
 		return errors.New("model_name is required")
 	}
 	return c.do(ctx, http.MethodDelete, routeModelScheduling(modelName), nil, nil)
+}
+
+func (c *Client) SetNodeSplitServer(ctx context.Context, nodeID string, on bool) (*localaitools.NodeSplitServer, error) {
+	var out localaitools.NodeSplitServer
+	if err := c.do(ctx, http.MethodPut, routeNodeSplitServer(nodeID), map[string]bool{"split_server": on}, &out); err != nil {
+		return nil, err
+	}
+	out.NodeID = nodeID
+	return &out, nil
 }
 
 func (c *Client) SetNodeVRAMBudget(ctx context.Context, nodeID, budget string) error {
@@ -1034,6 +1049,56 @@ func (c *Client) ClearRouterCorpus(ctx context.Context, routerModel string) (*lo
 	return &out, nil
 }
 
+// ---- Cluster carrier ----
+
+// GetClusterCarrier reads GET /api/cluster/carrier. A frontend that is not
+// distributed answers 503, which is reported as distributed=false.
+func (c *Client) GetClusterCarrier(ctx context.Context) (*localaitools.ClusterCarrierStatus, error) {
+	var raw struct {
+		Active         string `json:"active"`
+		State          string `json:"state"`
+		Target         string `json:"target"`
+		Epoch          int64  `json:"epoch"`
+		DrainRemaining int64  `json:"drain_remaining_ns"`
+		Replicas       []struct {
+			ID          string `json:"id"`
+			Version     string `json:"version"`
+			ReadyEpoch  int64  `json:"ready_epoch"`
+			ReadyReason string `json:"ready_reason"`
+		} `json:"replicas"`
+		Workers []struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Attached    []string `json:"attached"`
+			CanFollow   bool     `json:"can_follow"`
+			Reason      string   `json:"reason"`
+			FollowError string   `json:"follow_error"`
+		} `json:"workers"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeClusterCarrier, nil, &raw); err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && he.StatusCode == http.StatusServiceUnavailable {
+			return &localaitools.ClusterCarrierStatus{Distributed: false}, nil
+		}
+		return nil, err
+	}
+	out := &localaitools.ClusterCarrierStatus{
+		Distributed:           true,
+		Active:                raw.Active,
+		State:                 raw.State,
+		Target:                raw.Target,
+		Epoch:                 raw.Epoch,
+		DrainRemainingSeconds: float64(raw.DrainRemaining) / 1e9,
+	}
+	for _, r := range raw.Replicas {
+		out.Replicas = append(out.Replicas, localaitools.ClusterReplicaInfo{ID: r.ID, Version: r.Version, ReadyEpoch: r.ReadyEpoch, ReadyReason: r.ReadyReason})
+	}
+	for _, w := range raw.Workers {
+		out.Workers = append(out.Workers, localaitools.ClusterWorkerInfo{ID: w.ID, Name: w.Name, Attached: w.Attached, CanFollow: w.CanFollow, Reason: w.Reason, FollowError: w.FollowError})
+	}
+	return out, nil
+}
+
 // ---- Failover chains ----
 
 func (c *Client) ListFailoverChains(ctx context.Context) ([]localaitools.FailoverChainInfo, error) {
@@ -1058,6 +1123,177 @@ func (c *Client) CancelModelLoad(ctx context.Context, model, jobID string) (loca
 
 func (c *Client) UnpinFailoverTarget(ctx context.Context, chain string) error {
 	return c.do(ctx, http.MethodDelete, routeFailover+"/"+url.PathEscape(chain)+"/pin", nil, nil)
+}
+
+// ---- P2P ----
+
+// p2pStatusWire, p2pDeviceWire and p2pRelayWire are the parts of the REST
+// answers the tools show.
+type p2pStatusWire struct {
+	Mode           string   `json:"mode"`
+	Running        bool     `json:"running"`
+	Error          string   `json:"error"`
+	PeerID         string   `json:"peer_id"`
+	Addrs          []string `json:"addrs"`
+	Reachability   string   `json:"reachability"`
+	PendingInvites int      `json:"pending_invites"`
+	Devices        int      `json:"devices"`
+	RelayService   struct {
+		Running bool `json:"running"`
+	} `json:"relay_service"`
+}
+
+type p2pDeviceWire struct {
+	localaitools.P2PDeviceInfo
+	Path struct {
+		Kind       string `json:"kind"`
+		RelayLabel string `json:"relay_label"`
+	} `json:"path"`
+}
+
+func (c *Client) GetP2PStatus(ctx context.Context) (*localaitools.P2PStatusInfo, error) {
+	var w p2pStatusWire
+	if err := c.do(ctx, http.MethodGet, routeP2PStatus, nil, &w); err != nil {
+		return nil, err
+	}
+	return &localaitools.P2PStatusInfo{
+		Mode: w.Mode, Running: w.Running, Error: w.Error, PeerID: w.PeerID, Addrs: w.Addrs,
+		Reachability: w.Reachability, RelayService: w.RelayService.Running,
+		PendingInvites: w.PendingInvites, Devices: w.Devices,
+	}, nil
+}
+
+func (c *Client) ListP2PDevices(ctx context.Context) ([]localaitools.P2PDeviceInfo, error) {
+	var out struct {
+		Devices []p2pDeviceWire `json:"devices"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeP2PDevices, nil, &out); err != nil {
+		return nil, err
+	}
+	devs := make([]localaitools.P2PDeviceInfo, 0, len(out.Devices))
+	for _, d := range out.Devices {
+		info := d.P2PDeviceInfo
+		info.Path, info.RelayLabel = d.Path.Kind, d.Path.RelayLabel
+		devs = append(devs, info)
+	}
+	return devs, nil
+}
+
+func (c *Client) ListP2PInvites(ctx context.Context) ([]localaitools.P2PInviteInfo, error) {
+	var out struct {
+		Invites []localaitools.P2PInviteInfo `json:"invites"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeP2PInvites, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Invites, nil
+}
+
+func (c *Client) ListP2PRelays(ctx context.Context) ([]localaitools.P2PRelayInfo, error) {
+	var out struct {
+		Relays []localaitools.P2PRelayInfo `json:"relays"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeP2PRelays, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Relays, nil
+}
+
+func (c *Client) GetP2PRelayLimits(ctx context.Context, id string) (*localaitools.P2PRelayLimitsInfo, error) {
+	var out struct {
+		Limits    localaitools.P2PRelayLimitsInfo `json:"limits"`
+		Ceiling   localaitools.P2PRelayCeiling    `json:"ceiling"`
+		CanChange bool                            `json:"can_change"`
+		Restarted bool                            `json:"restarted"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeP2PRelays+"/"+url.PathEscape(id)+"/limits", nil, &out); err != nil {
+		return nil, err
+	}
+	info := out.Limits
+	info.Ceiling, info.CanChange, info.Restarted = out.Ceiling, out.CanChange, out.Restarted
+	return &info, nil
+}
+
+func (c *Client) SetP2PRelayLimits(ctx context.Context, id string, req localaitools.SetP2PRelayLimitsRequest) (*localaitools.P2PRelayLimitsInfo, error) {
+	var out struct {
+		Limits    localaitools.P2PRelayLimitsInfo `json:"limits"`
+		Ceiling   localaitools.P2PRelayCeiling    `json:"ceiling"`
+		CanChange bool                            `json:"can_change"`
+		Restarted bool                            `json:"restarted"`
+	}
+	body := struct {
+		CircuitBytes   *int64 `json:"circuit_bytes,omitempty"`
+		CircuitSeconds *int64 `json:"circuit_seconds,omitempty"`
+		RateBPS        *int64 `json:"rate_bps,omitempty"`
+	}{req.CircuitBytes, req.CircuitSeconds, req.RateBPS}
+	if err := c.do(ctx, http.MethodPut, routeP2PRelays+"/"+url.PathEscape(id)+"/limits", body, &out); err != nil {
+		return nil, err
+	}
+	info := out.Limits
+	info.Ceiling, info.CanChange, info.Restarted = out.Ceiling, out.CanChange, out.Restarted
+	return &info, nil
+}
+
+func (c *Client) RevokeP2PDevice(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, routeP2PDevices+"/"+url.PathEscape(id), nil, nil)
+}
+
+func (c *Client) CancelP2PInvite(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, routeP2PInvites+"/"+url.PathEscape(id), nil, nil)
+}
+
+// p2pSplitWire is the part of a model-split worker the tools show.
+type p2pSplitWire struct {
+	localaitools.P2PSplitWorkerInfo
+	Path struct {
+		Kind       string `json:"kind"`
+		RelayLabel string `json:"relay_label"`
+	} `json:"path"`
+	NodeRelayWire *struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	} `json:"node_relay"`
+}
+
+func (w p2pSplitWire) info() localaitools.P2PSplitWorkerInfo {
+	info := w.P2PSplitWorkerInfo
+	info.Path, info.RelayLabel = w.Path.Kind, w.Path.RelayLabel
+	if w.NodeRelayWire != nil {
+		info.NodeRelay, info.NodeRelayReason = w.NodeRelayWire.State, w.NodeRelayWire.Reason
+	}
+	return info
+}
+
+func (c *Client) ListP2PSplitWorkers(ctx context.Context) ([]localaitools.P2PSplitWorkerInfo, error) {
+	var out struct {
+		Workers []p2pSplitWire `json:"workers"`
+	}
+	if err := c.do(ctx, http.MethodGet, routeP2PSplitWorkers, nil, &out); err != nil {
+		return nil, err
+	}
+	ws := make([]localaitools.P2PSplitWorkerInfo, 0, len(out.Workers))
+	for _, w := range out.Workers {
+		ws = append(ws, w.info())
+	}
+	return ws, nil
+}
+
+func (c *Client) SetP2PSplitSlowPath(ctx context.Context, id string, allow bool) (*localaitools.P2PSplitWorkerInfo, error) {
+	var w p2pSplitWire
+	if err := c.do(ctx, http.MethodPatch, routeP2PSplitWorkers+"/"+url.PathEscape(id), map[string]bool{"allow_slow_path": allow}, &w); err != nil {
+		return nil, err
+	}
+	info := w.info()
+	return &info, nil
+}
+
+func (c *Client) SetP2PSplitNode(ctx context.Context, id, nodeID string) (*localaitools.P2PSplitWorkerInfo, error) {
+	var w p2pSplitWire
+	if err := c.do(ctx, http.MethodPatch, routeP2PSplitWorkers+"/"+url.PathEscape(id), map[string]string{"node_id": nodeID}, &w); err != nil {
+		return nil, err
+	}
+	info := w.info()
+	return &info, nil
 }
 
 // ---- Shared folders ----
@@ -1178,4 +1414,51 @@ func (c *Client) SetChatEgressCeiling(ctx context.Context, ceiling string) (*loc
 		return nil, err
 	}
 	return c.GetChatEgress(ctx)
+}
+
+// ---- Federation ----
+
+// The REST answers of the federation routes have the field names of the
+// DTOs, so they decode into them directly.
+
+func (c *Client) GetFederation(ctx context.Context) (*localaitools.FederationInfo, error) {
+	var out localaitools.FederationInfo
+	if err := c.do(ctx, http.MethodGet, routeFederation, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ManageFederationGroup(ctx context.Context, req localaitools.FederationGroupAction) (*localaitools.FederationGroupInfo, error) {
+	group := routeFederationGroups + "/" + url.PathEscape(req.Name)
+	var (
+		method, path string
+		body         any
+	)
+	switch req.Action {
+	case localaitools.FederationActionCreate:
+		method, path = http.MethodPost, routeFederationGroups
+		body = map[string]any{"name": req.Name, "policy": req.Policy, "members": req.Members}
+	case localaitools.FederationActionUpdate:
+		patch := map[string]any{}
+		if req.Policy != "" {
+			patch["policy"] = req.Policy
+		}
+		if req.Members != nil {
+			patch["members"] = req.Members
+		}
+		method, path, body = http.MethodPatch, group, patch
+	case localaitools.FederationActionDelete:
+		return nil, c.do(ctx, http.MethodDelete, group, nil, nil)
+	case localaitools.FederationActionDrain, localaitools.FederationActionUndrain:
+		method, path = http.MethodPost, group+"/drain"
+		body = map[string]any{"model": req.Model, "drain": req.Action == localaitools.FederationActionDrain}
+	default:
+		return nil, fmt.Errorf("unknown federation action %q", req.Action)
+	}
+	var out localaitools.FederationGroupInfo
+	if err := c.do(ctx, method, path, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

@@ -491,6 +491,71 @@ func (f *fakeClient) ClearRouterCorpus(_ context.Context, routerModel string) (*
 	return &RouterCorpusClearResult{Router: routerModel}, nil
 }
 
+func (f *fakeClient) GetClusterCarrier(_ context.Context) (*ClusterCarrierStatus, error) {
+	f.record("GetClusterCarrier", nil)
+	return &ClusterCarrierStatus{Distributed: true, Active: "tunnel", State: "stable", Epoch: 1}, nil
+}
+
+func (f *fakeClient) GetP2PStatus(_ context.Context) (*P2PStatusInfo, error) {
+	f.record("GetP2PStatus", nil)
+	return &P2PStatusInfo{Mode: "share"}, nil
+}
+
+func (f *fakeClient) ListP2PDevices(_ context.Context) ([]P2PDeviceInfo, error) {
+	f.record("ListP2PDevices", nil)
+	return []P2PDeviceInfo{}, nil
+}
+
+func (f *fakeClient) ListP2PInvites(_ context.Context) ([]P2PInviteInfo, error) {
+	f.record("ListP2PInvites", nil)
+	return []P2PInviteInfo{}, nil
+}
+
+func (f *fakeClient) ListP2PRelays(_ context.Context) ([]P2PRelayInfo, error) {
+	f.record("ListP2PRelays", nil)
+	return []P2PRelayInfo{}, nil
+}
+
+func (f *fakeClient) GetP2PRelayLimits(_ context.Context, id string) (*P2PRelayLimitsInfo, error) {
+	f.record("GetP2PRelayLimits", id)
+	return &P2PRelayLimitsInfo{CanChange: true}, nil
+}
+
+func (f *fakeClient) SetP2PRelayLimits(_ context.Context, id string, req SetP2PRelayLimitsRequest) (*P2PRelayLimitsInfo, error) {
+	f.record("SetP2PRelayLimits", id)
+	return &P2PRelayLimitsInfo{CanChange: true}, nil
+}
+
+func (f *fakeClient) RevokeP2PDevice(_ context.Context, id string) error {
+	f.record("RevokeP2PDevice", id)
+	return nil
+}
+
+func (f *fakeClient) CancelP2PInvite(_ context.Context, id string) error {
+	f.record("CancelP2PInvite", id)
+	return nil
+}
+
+func (f *fakeClient) ListP2PSplitWorkers(_ context.Context) ([]P2PSplitWorkerInfo, error) {
+	f.record("ListP2PSplitWorkers", nil)
+	return []P2PSplitWorkerInfo{}, nil
+}
+
+func (f *fakeClient) SetP2PSplitSlowPath(_ context.Context, id string, allow bool) (*P2PSplitWorkerInfo, error) {
+	f.record("SetP2PSplitSlowPath", id)
+	return &P2PSplitWorkerInfo{ID: id, AllowSlowPath: allow}, nil
+}
+
+func (f *fakeClient) SetNodeSplitServer(_ context.Context, nodeID string, on bool) (*NodeSplitServer, error) {
+	f.record("SetNodeSplitServer", []any{nodeID, on})
+	return &NodeSplitServer{NodeID: nodeID, SplitServer: on}, nil
+}
+
+func (f *fakeClient) SetP2PSplitNode(_ context.Context, id, nodeID string) (*P2PSplitWorkerInfo, error) {
+	f.record("SetP2PSplitNode", id)
+	return &P2PSplitWorkerInfo{ID: id, NodeID: nodeID}, nil
+}
+
 func (f *fakeClient) ListFailoverChains(_ context.Context) ([]FailoverChainInfo, error) {
 	f.record("ListFailoverChains", nil)
 	if f.listFailoverChains != nil {
@@ -513,6 +578,19 @@ func (f *fakeClient) UnpinFailoverTarget(_ context.Context, chain string) error 
 		return f.unpinFailoverTarget(chain)
 	}
 	return nil
+}
+
+func (f *fakeClient) GetFederation(_ context.Context) (*FederationInfo, error) {
+	f.record("GetFederation", nil)
+	return &FederationInfo{Instances: []FederationInstanceInfo{}, Groups: []FederationGroupInfo{}}, nil
+}
+
+func (f *fakeClient) ManageFederationGroup(_ context.Context, req FederationGroupAction) (*FederationGroupInfo, error) {
+	f.record("ManageFederationGroup", req)
+	if req.Action == FederationActionDelete {
+		return nil, nil
+	}
+	return &FederationGroupInfo{Name: req.Name, Members: []FederationMemberInfo{}}, nil
 }
 
 func (f *fakeClient) ListSharedFolders(_ context.Context) ([]SharedFolder, error) {

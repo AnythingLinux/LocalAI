@@ -214,6 +214,43 @@ type LocalAIClient interface {
 	// index.
 	ClearRouterCorpus(ctx context.Context, routerModel string) (*RouterCorpusClearResult, error)
 
+	// ---- Distributed carrier ----
+	// GetClusterCarrier reports which transport the cluster uses (NATS or the
+	// database tunnel), the state of a change, the frontends and the workers
+	// that cannot follow a change. It never changes anything.
+	GetClusterCarrier(ctx context.Context) (*ClusterCarrierStatus, error)
+
+	// ---- P2P ----
+	// GetP2PStatus reports the mode and state of the P2P layer.
+	GetP2PStatus(ctx context.Context) (*P2PStatusInfo, error)
+	// ListP2PDevices lists the paired devices with how each one is
+	// connected. Needs P2P mode share.
+	ListP2PDevices(ctx context.Context) ([]P2PDeviceInfo, error)
+	// ListP2PInvites lists the invites and their state, never the links.
+	ListP2PInvites(ctx context.Context) ([]P2PInviteInfo, error)
+	// ListP2PRelays lists the relays the server knows.
+	ListP2PRelays(ctx context.Context) ([]P2PRelayInfo, error)
+	// GetP2PRelayLimits reads the limits of one relay.
+	GetP2PRelayLimits(ctx context.Context, id string) (*P2PRelayLimitsInfo, error)
+	// SetP2PRelayLimits changes the limits of a relay this server administers.
+	SetP2PRelayLimits(ctx context.Context, id string, req SetP2PRelayLimitsRequest) (*P2PRelayLimitsInfo, error)
+	// RevokeP2PDevice revokes a paired device: it is cut off at once.
+	RevokeP2PDevice(ctx context.Context, id string) error
+	// CancelP2PInvite cancels a pending invite.
+	CancelP2PInvite(ctx context.Context, id string) error
+	// ListP2PSplitWorkers lists the llama.cpp RPC and MLX workers that lend
+	// their memory to this server. Needs P2P mode share.
+	ListP2PSplitWorkers(ctx context.Context) ([]P2PSplitWorkerInfo, error)
+	// SetP2PSplitSlowPath uses a split worker over a relayed path ("Use
+	// anyway") or stops using it there.
+	SetP2PSplitSlowPath(ctx context.Context, id string, allow bool) (*P2PSplitWorkerInfo, error)
+	// SetP2PSplitNode attaches a split worker to a backend node of the
+	// cluster, or to this server with an empty node ID.
+	SetP2PSplitNode(ctx context.Context, id, nodeID string) (*P2PSplitWorkerInfo, error)
+	// SetNodeSplitServer declares a backend node a split server, or clears
+	// the declaration, which detaches its split workers.
+	SetNodeSplitServer(ctx context.Context, nodeID string, on bool) (*NodeSplitServer, error)
+
 	// ---- Failover chains ----
 	// ListFailoverChains reports every configured failover chain, its
 	// currently active target, and the health of each target.
@@ -224,6 +261,16 @@ type LocalAIClient interface {
 	// UnpinFailoverTarget removes chain's pin so health decides the
 	// active target again.
 	UnpinFailoverTarget(ctx context.Context, chain string) error
+
+	// ---- Federation ----
+	// GetFederation lists the LocalAI instances that can serve a group
+	// (this server and the remotes of kind localai) and the groups: model
+	// names served by several instances.
+	GetFederation(ctx context.Context) (*FederationInfo, error)
+	// ManageFederationGroup creates, updates, deletes, drains or undrains a
+	// group. It returns the group as it is after the change, nil after a
+	// delete.
+	ManageFederationGroup(ctx context.Context, req FederationGroupAction) (*FederationGroupInfo, error)
 
 	// ---- Client (inference) ----
 	// These run inference through the LocalAI API as the acting user, so the

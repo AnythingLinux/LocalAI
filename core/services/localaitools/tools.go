@@ -72,6 +72,15 @@ const (
 	ToolPinFailoverTarget    = "pin_failover_target"
 	ToolUnpinFailoverTarget  = "unpin_failover_target"
 	ToolSetChatEgressCeiling = "set_chat_egress_ceiling"
+	ToolRevokeP2PDevice      = "revoke_p2p_device"
+	ToolCancelP2PInvite      = "cancel_p2p_invite"
+	// ToolManageFederationGroup creates, updates, deletes, drains and
+	// undrains federation groups (an action parameter).
+	ToolManageFederationGroup = "manage_federation_group"
+	ToolSetP2PSplitSlowPath   = "set_p2p_split_slow_path"
+	ToolSetP2PSplitNode       = "set_p2p_split_node"
+	ToolSetNodeSplitServer    = "set_node_split_server"
+	ToolSetP2PRelayLimits     = "set_p2p_relay_limits"
 
 	// ToolListAliases is read-only but lives here so the alias tools stay
 	// grouped; the catalog tests assert its read-only placement.
@@ -80,6 +89,27 @@ const (
 	// ToolListFailoverChains is read-only but lives here so the failover
 	// tools stay grouped; the catalog tests assert its read-only placement.
 	ToolListFailoverChains = "list_failover_chains"
+
+	// ToolGetClusterCarrier is read-only. There is no tool that changes the
+	// carrier: a change moves every frontend and worker of the cluster, so an
+	// admin makes it in the dashboard or with the `local-ai cluster` command.
+	ToolGetClusterCarrier = "get_cluster_carrier"
+
+	// The read-only P2P tools; revoke_p2p_device and cancel_p2p_invite are
+	// in the mutating block above.
+	ToolGetP2PStatus      = "get_p2p_status"
+	ToolListP2PDevices    = "list_p2p_devices"
+	ToolListP2PInvites    = "list_p2p_invites"
+	ToolListP2PRelays     = "list_p2p_relays"
+	ToolGetP2PRelayLimits = "get_p2p_relay_limits"
+	// ToolListP2PSplitWorkers lists the model-split workers;
+	// set_p2p_split_slow_path and set_p2p_split_node are in the mutating
+	// block above.
+	ToolListP2PSplitWorkers = "list_p2p_split_workers"
+
+	// ToolListFederation is read-only: the instances and the federation
+	// groups; manage_federation_group is in the mutating block above.
+	ToolListFederation = "list_federation"
 )
 
 // DefaultServerName is the MCP Implementation.Name surfaced when
@@ -120,4 +150,11 @@ var mutatingToolNames = []string{
 	ToolPinFailoverTarget,
 	ToolUnpinFailoverTarget,
 	ToolSetChatEgressCeiling,
+	ToolRevokeP2PDevice,
+	ToolCancelP2PInvite,
+	ToolManageFederationGroup,
+	ToolSetP2PSplitSlowPath,
+	ToolSetP2PSplitNode,
+	ToolSetNodeSplitServer,
+	ToolSetP2PRelayLimits,
 }

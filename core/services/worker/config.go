@@ -1,5 +1,12 @@
 package worker
 
+import (
+	"errors"
+	"time"
+
+	"github.com/mudler/xlog"
+)
+
 // Config is the configuration for the distributed agent worker.
 //
 // Field tags are kong/kong-env metadata read by core/cli/worker.go's WorkerCMD,
@@ -9,7 +16,10 @@ package worker
 // Workers are backend-agnostic — they wait for backend.install NATS events
 // from the SmartRouter to install and start the required backend.
 //
-// NATS is required. The worker acts as a process supervisor:
+// The carrier is not a setting of the worker. The frontend names it in the answer
+// to the registration. With NATS the worker needs the URL of the server. With the
+// tunnel it needs nothing but the URL of the frontend. The worker acts as a
+// process supervisor:
 // - Receives backend.install → installs backend from gallery, starts gRPC process, replies success
 // - Receives backend.stop → stops the gRPC process
 // - Receives stop → full shutdown (deregister + exit)
@@ -55,14 +65,20 @@ type Config struct {
 	EphemeralStagingMinFreeBytes int64  `env:"LOCALAI_EPHEMERAL_STAGING_MIN_FREE_BYTES" default:"0" help:"Filesystem space kept free while staging request inputs. Zero or negative uses max(1 GiB, 5% of filesystem capacity)." group:"server"`
 
 	// Registration (required)
-	AdvertiseAddr           string `env:"LOCALAI_ADVERTISE_ADDR" help:"Address the frontend uses to reach this node (defaults to hostname:port from Addr)" group:"registration" hidden:""`
-	RegisterTo              string `env:"LOCALAI_REGISTER_TO" required:"" help:"Frontend URL for registration" group:"registration"`
-	NodeName                string `env:"LOCALAI_NODE_NAME" help:"Node name for registration (defaults to hostname)" group:"registration"`
-	RegistrationToken       string `env:"LOCALAI_REGISTRATION_TOKEN" help:"Token for authenticating with the frontend" group:"registration"`
-	RegistrationRequireAuth bool   `env:"LOCALAI_REGISTRATION_REQUIRE_AUTH" default:"false" help:"Refuse to start the HTTP file-transfer server when no registration token is set (otherwise it fails open and serves read/write to models/staging/data unauthenticated)" group:"registration"`
-	DistributedRequireAuth  bool   `env:"LOCALAI_DISTRIBUTED_REQUIRE_AUTH" default:"false" help:"Umbrella switch implying both --nats-require-auth and --registration-require-auth" group:"distributed"`
-	HeartbeatInterval       string `env:"LOCALAI_HEARTBEAT_INTERVAL" default:"10s" help:"Interval between heartbeats" group:"registration"`
-	NodeLabels              string `env:"LOCALAI_NODE_LABELS" help:"Comma-separated key=value labels for this node (e.g. tier=fast,gpu=a100)" group:"registration"`
+	AdvertiseAddr           string   `env:"LOCALAI_ADVERTISE_ADDR" help:"Address the frontend uses to reach this node (defaults to hostname:port from Addr)" group:"registration" hidden:""`
+	RegisterTo              string   `env:"LOCALAI_REGISTER_TO" help:"Frontend URL for registration. Required unless --join is given" group:"registration"`
+	Join                    string   `env:"LOCALAI_JOIN" help:"Join the cluster over P2P with a worker invite link (localai://pair?...), instead of --register-to and a registration token. The worker needs no inbound port; an admin approves it" group:"registration"`
+	P2PIdentity             string   `name:"p2p-identity" env:"LOCALAI_P2P_IDENTITY" help:"Key file of the P2P identity of this worker, used with --join and by the host that model-split workers attached to this node connect to (default: <models path>/../data/p2p/identity.key)" group:"registration"`
+	P2PBootstrap            []string `name:"p2p-bootstrap" env:"LOCALAI_P2P_BOOTSTRAP_PEERS_MADDRS" help:"Peers that the P2P host connects to at start, multiaddrs that end in /p2p/<peer ID>. With --join, give the address of the frontend on a network where the invite carries none (a LAN with no public address)" group:"registration"`
+	P2PListen               []string `name:"p2p-listen" env:"LOCALAI_P2P_LISTEN_MADDRS" help:"Listen multiaddrs of the P2P host of this worker (default: TCP and QUIC on every interface, random ports). Model-split workers attached to this node connect to it; a fixed, open port gives them a direct path" group:"registration"`
+	SplitServer             bool     `name:"split-server" env:"LOCALAI_SPLIT_SERVER" help:"Declare this worker a split server: it may serve model-split workers (llama.cpp RPC and MLX helpers). It then runs a P2P host with open ports, the frontend admits it on the relays it administers, and the helpers attached to it join the next model it loads. The admin can also turn it on or off on the Nodes page" group:"registration"`
+	AllowOpenRelay          bool     `env:"LOCALAI_ALLOW_OPEN_RELAY" help:"With --join: redeem an invite that names an open relay, which anyone can use" group:"registration"`
+	NodeName                string   `env:"LOCALAI_NODE_NAME" help:"Node name for registration (defaults to hostname)" group:"registration"`
+	RegistrationToken       string   `env:"LOCALAI_REGISTRATION_TOKEN" help:"Token for authenticating with the frontend" group:"registration"`
+	RegistrationRequireAuth bool     `env:"LOCALAI_REGISTRATION_REQUIRE_AUTH" default:"false" help:"Refuse to start the HTTP file-transfer server when no registration token is set (otherwise it fails open and serves read/write to models/staging/data unauthenticated)" group:"registration"`
+	DistributedRequireAuth  bool     `env:"LOCALAI_DISTRIBUTED_REQUIRE_AUTH" default:"false" help:"Umbrella switch implying both --nats-require-auth and --registration-require-auth" group:"distributed"`
+	HeartbeatInterval       string   `env:"LOCALAI_HEARTBEAT_INTERVAL" default:"10s" help:"Interval between heartbeats" group:"registration"`
+	NodeLabels              string   `env:"LOCALAI_NODE_LABELS" help:"Comma-separated key=value labels for this node (e.g. tier=fast,gpu=a100)" group:"registration"`
 	// MaxReplicasPerModel caps how many replicas of any one model can run on
 	// this worker concurrently. Default 1 = historical single-replica
 	// behavior. Set higher when a node has enough VRAM to host multiple
@@ -77,8 +93,12 @@ type Config struct {
 	// enforces it against the raw VRAM this worker reports. Empty = no cap.
 	VRAMBudget string `env:"LOCALAI_VRAM_BUDGET" help:"Cap VRAM used for model allocation on this worker node, as a percentage (e.g. 80%) or absolute amount (e.g. 12GB)." group:"registration"`
 
-	// NATS (required)
-	NatsURL         string `env:"LOCALAI_NATS_URL" required:"" help:"NATS server URL" group:"distributed"`
+	// FollowMaxDelay bounds the random wait before the worker attaches to a carrier
+	// that the cluster changed to, so that a fleet does not connect at once.
+	FollowMaxDelay string `env:"LOCALAI_FOLLOW_MAX_DELAY" default:"10s" help:"Longest random wait before this worker attaches to the carrier that the cluster changed to" group:"registration" hidden:""`
+
+	// NATS. The URL is needed only when the cluster runs on NATS.
+	NatsURL         string `env:"LOCALAI_NATS_URL" help:"NATS server URL. Optional: the frontend hands over the address when the cluster runs on NATS, and this overrides it" group:"distributed"`
 	NatsJWT         string `env:"LOCALAI_NATS_JWT" help:"NATS user JWT override (normally from registration nats_jwt)" group:"distributed"`
 	NatsUserSeed    string `env:"LOCALAI_NATS_USER_SEED" help:"NATS user signing seed override (normally from registration nats_user_seed)" group:"distributed"`
 	NatsRequireAuth bool   `env:"LOCALAI_NATS_REQUIRE_AUTH" default:"false" help:"Require NATS JWT+seed from registration or env" group:"distributed"`
@@ -92,6 +112,21 @@ type Config struct {
 	StorageRegion    string `env:"LOCALAI_STORAGE_REGION" help:"S3 region" group:"distributed"`
 	StorageAccessKey string `env:"LOCALAI_STORAGE_ACCESS_KEY" help:"S3 access key" group:"distributed"`
 	StorageSecretKey string `env:"LOCALAI_STORAGE_SECRET_KEY" help:"S3 secret key" group:"distributed"`
+
+	// join is the P2P side of a worker that started with --join. Run sets it.
+	join *p2pJoin
+}
+
+// validateFrontend checks that the worker knows how to reach the frontend:
+// --register-to or --join, and not both.
+func (c Config) validateFrontend() error {
+	switch {
+	case c.Join != "" && c.RegisterTo != "":
+		return errors.New("--join and --register-to are two ways to reach the frontend: give one of them")
+	case c.Join == "" && c.RegisterTo == "":
+		return errors.New("missing --register-to (LOCALAI_REGISTER_TO): the URL of the frontend, or --join with a worker invite link")
+	}
+	return nil
 }
 
 // NatsAuthRequired reports whether NATS JWT credentials must be present — the
@@ -104,4 +139,22 @@ func (c Config) NatsAuthRequired() bool {
 // before the file-transfer server may start — the granular flag or the umbrella.
 func (c Config) RegistrationAuthRequired() bool {
 	return c.RegistrationRequireAuth || c.DistributedRequireAuth
+}
+
+// followMaxDelay returns the longest random wait before the worker follows a
+// change of carrier. A value that is not a duration is the default.
+func (c Config) followMaxDelay() time.Duration {
+	if c.FollowMaxDelay == "" {
+		return DefaultFollowMaxDelay
+	}
+	d, err := time.ParseDuration(c.FollowMaxDelay)
+	if err != nil {
+		xlog.Warn("invalid follow delay, using the default", "input", c.FollowMaxDelay, "error", err)
+		return DefaultFollowMaxDelay
+	}
+	if d == 0 {
+		// Zero is "no wait" here, and a zero in the options means the default.
+		return -1
+	}
+	return d
 }

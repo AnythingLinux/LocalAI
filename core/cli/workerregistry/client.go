@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/mudler/xlog"
 
+	"github.com/mudler/LocalAI/core/services/workerctl"
 	"github.com/mudler/LocalAI/pkg/httpclient"
 )
 
@@ -24,8 +26,12 @@ type RegistrationClient struct {
 	FrontendURL       string
 	RegistrationToken string
 	HTTPTimeout       time.Duration // used for registration calls; defaults to 10s
-	client            *http.Client
-	clientOnce        sync.Once
+	// HTTPClient, when set, carries every call instead of a client built from
+	// HTTPTimeout: a worker that joined over P2P reaches the frontend through
+	// the P2P layer, whatever host FrontendURL names.
+	HTTPClient *http.Client
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 // httpTimeout returns the configured timeout or a sensible default.
@@ -39,6 +45,10 @@ func (c *RegistrationClient) httpTimeout() time.Duration {
 // httpClient returns the shared HTTP client, initializing it on first use.
 func (c *RegistrationClient) httpClient() *http.Client {
 	c.clientOnce.Do(func() {
+		if c.HTTPClient != nil {
+			c.client = c.HTTPClient
+			return
+		}
 		c.client = httpclient.NewWithTimeout(c.httpTimeout())
 	})
 	return c.client
@@ -63,6 +73,39 @@ type RegisterResponse struct {
 	APIToken     string `json:"api_token,omitempty"`
 	NatsJWT      string `json:"nats_jwt,omitempty"`
 	NatsUserSeed string `json:"nats_user_seed,omitempty"`
+	// Carrier is the carrier that is active in the cluster: "nats" or "tunnel".
+	// A frontend that predates carriers does not send it, and then the cluster
+	// runs on NATS. CarrierEpoch is the epoch of the carrier row at that time.
+	Carrier      string `json:"carrier,omitempty"`
+	CarrierEpoch int64  `json:"carrier_epoch,omitempty"`
+	// TunnelToken is the own credential of the node for the tunnel. It is sent
+	// once and only when the tunnel is the active carrier.
+	TunnelToken string `json:"tunnel_token,omitempty"`
+	// CarrierState, CarrierTarget and CarrierDraining say whether a change of
+	// carrier is under way. CredentialFor is the carrier that the credential in
+	// the answer is for: the one the worker asked for, when the frontend allowed
+	// it, else the active one.
+	CarrierState    string `json:"carrier_state,omitempty"`
+	CarrierTarget   string `json:"carrier_target,omitempty"`
+	CarrierDraining string `json:"carrier_draining,omitempty"`
+	CredentialFor   string `json:"credential_for,omitempty"`
+	// NatsURL is the address workers use for NATS, NatsCA the CA of the server as
+	// PEM, and NatsClientTLS says the server asks for a client certificate, which
+	// the frontend cannot hand over.
+	NatsURL       string `json:"nats_url,omitempty"`
+	NatsCA        string `json:"nats_ca,omitempty"`
+	NatsClientTLS bool   `json:"nats_client_tls,omitempty"`
+}
+
+// HeartbeatReply is the answer to a heartbeat. The carrier fields are empty when
+// the frontend predates carriers.
+type HeartbeatReply struct {
+	Carrier         string `json:"carrier,omitempty"`
+	CarrierEpoch    int64  `json:"carrier_epoch,omitempty"`
+	CarrierState    string `json:"carrier_state,omitempty"`
+	CarrierTarget   string `json:"carrier_target,omitempty"`
+	CarrierDraining string `json:"carrier_draining,omitempty"`
+	NatsClientTLS   bool   `json:"nats_client_tls,omitempty"`
 }
 
 // RegisterFull sends a single registration request and returns the full
@@ -97,58 +140,84 @@ func (c *RegistrationClient) RegisterFull(ctx context.Context, body map[string]a
 	return &result, nil
 }
 
-// Register sends a single registration request and returns the node ID and
-// optional credentials (API token for agent workers, NATS JWT when configured).
-func (c *RegistrationClient) Register(ctx context.Context, body map[string]any) (nodeID, apiToken, natsJWT, natsSeed string, err error) {
-	res, err := c.RegisterFull(ctx, body)
+// RegisterWithRetry retries registration with exponential backoff.
+func (c *RegistrationClient) RegisterWithRetry(ctx context.Context, body map[string]any, maxRetries int) (nodeID, apiToken, natsJWT, natsSeed string, err error) {
+	res, err := c.RegisterFullWithRetry(ctx, body, maxRetries)
 	if err != nil {
 		return "", "", "", "", err
 	}
 	return res.ID, res.APIToken, res.NatsJWT, res.NatsUserSeed, nil
 }
 
-// RegisterWithRetry retries registration with exponential backoff.
-func (c *RegistrationClient) RegisterWithRetry(ctx context.Context, body map[string]any, maxRetries int) (nodeID, apiToken, natsJWT, natsSeed string, err error) {
+// RegisterFullWithRetry is RegisterWithRetry that returns the whole response.
+func (c *RegistrationClient) RegisterFullWithRetry(ctx context.Context, body map[string]any, maxRetries int) (*RegisterResponse, error) {
+	if maxRetries < 1 {
+		return nil, fmt.Errorf("registering: %d attempts allowed, want at least one", maxRetries)
+	}
 	backoff := 2 * time.Second
 	maxBackoff := 30 * time.Second
 
+	var err error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		nodeID, apiToken, natsJWT, natsSeed, err = c.Register(ctx, body)
+		var res *RegisterResponse
+		res, err = c.RegisterFull(ctx, body)
 		if err == nil {
-			return nodeID, apiToken, natsJWT, natsSeed, nil
+			return res, nil
 		}
 		if attempt == maxRetries {
-			return "", "", "", "", fmt.Errorf("failed after %d attempts: %w", maxRetries, err)
+			return nil, fmt.Errorf("failed after %d attempts: %w", maxRetries, err)
 		}
 		xlog.Warn("Registration failed, retrying", "attempt", attempt, "next_retry", backoff, "error", err)
 		select {
 		case <-ctx.Done():
-			return "", "", "", "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(backoff):
 		}
 		backoff = min(backoff*2, maxBackoff)
 	}
-	return nodeID, apiToken, natsJWT, natsSeed, err
+	return nil, err
 }
 
-// Heartbeat sends a single heartbeat POST with the given body.
+// Heartbeat sends a single heartbeat POST with the given body. It fails only when
+// the request cannot be made.
 func (c *RegistrationClient) Heartbeat(ctx context.Context, nodeID string, body map[string]any) error {
+	resp, err := c.post(ctx, nodeID, body)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// HeartbeatFull sends a heartbeat and returns the answer, which tells the worker
+// which carrier the cluster uses. It fails when the frontend refuses the
+// heartbeat, for example for a node it does not know.
+func (c *RegistrationClient) HeartbeatFull(ctx context.Context, nodeID string, body map[string]any) (*HeartbeatReply, error) {
+	resp, err := c.post(ctx, nodeID, body)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("heartbeat refused with status %d", resp.StatusCode)
+	}
+	var reply HeartbeatReply
+	// An answer that is not JSON is the answer of a frontend that says nothing
+	// about carriers.
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&reply)
+	return &reply, nil
+}
+
+func (c *RegistrationClient) post(ctx context.Context, nodeID string, body map[string]any) (*http.Response, error) {
 	jsonBody, _ := json.Marshal(body)
 	url := c.baseURL() + "/api/node/" + nodeID + "/heartbeat"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
 	if err != nil {
-		return fmt.Errorf("creating heartbeat request: %w", err)
+		return nil, fmt.Errorf("creating heartbeat request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
-
-	resp, err := c.httpClient().Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return nil
+	return c.httpClient().Do(req)
 }
 
 // HeartbeatLoop runs heartbeats at the given interval until ctx is cancelled.
@@ -283,4 +352,34 @@ func (c *RegistrationClient) GracefulDeregister(nodeID string) {
 	} else {
 		xlog.Info("Deregistered from frontend")
 	}
+}
+
+// SplitSync sends the split report of a node and returns the model-split
+// workers attached to it (POST /api/node/{id}/split). An error leaves the
+// caller with its last answer: the frontend may be down, or may not share
+// over P2P.
+func (c *RegistrationClient) SplitSync(ctx context.Context, nodeID string, rep workerctl.SplitReport) (*workerctl.SplitAssignment, error) {
+	body, err := json.Marshal(rep)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/api/node/"+nodeID+"/split", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating split report request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("split report refused with status %d", resp.StatusCode)
+	}
+	var out workerctl.SplitAssignment
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("reading the split assignment: %w", err)
+	}
+	return &out, nil
 }

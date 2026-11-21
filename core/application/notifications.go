@@ -62,8 +62,8 @@ func (a *Application) initNotifications() {
 		return
 	}
 	var fan notify.Fanout
-	if d := a.Distributed(); d != nil && d.Nats != nil {
-		fan = notify.NewBroadcastFanout(d.Nats, nil)
+	if d := a.Distributed(); d != nil && d.Broadcaster != nil {
+		fan = notify.NewBroadcastFanout(d.Broadcaster, nil)
 	}
 	n := notify.NewService(notify.Options{Store: st, Fanout: fan})
 	// A notification of a run goes to the Telegram chat of a binding too. The

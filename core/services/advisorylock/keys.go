@@ -54,4 +54,7 @@ const (
 	// for updates of the installed models and writes the model digest. It is
 	// held for one check.
 	KeyModelUpdateCheck int64 = 119
+	// KeyCarrierSwitch elects the one frontend that makes the next move of a
+	// change of carrier.
+	KeyCarrierSwitch int64 = 120
 )

@@ -47,6 +47,14 @@ const (
 	routeVersion                = "/version"
 	routeSystem                 = "/system"
 	routeFailover               = "/api/failover"
+	routeClusterCarrier         = "/api/cluster/carrier"
+	routeP2PStatus              = "/api/p2p/status"
+	routeP2PDevices             = "/api/p2p/devices"
+	routeP2PInvites             = "/api/p2p/invites"
+	routeP2PRelays              = "/api/p2p/relays"
+	routeFederation             = "/api/federation"
+	routeFederationGroups       = "/api/federation/groups"
+	routeP2PSplitWorkers        = "/api/p2p/split-workers"
 	routeSharedFolders          = "/api/chats/admin/shared-folders"
 	routeSharedFolderRestore    = "/api/chats/admin/shared-folders/restore"
 	routeSharedFolderEvents     = "/api/chats/admin/shared-folders/events"
@@ -95,6 +103,10 @@ func routeToggleModelState(name, action string) string {
 
 func routeToggleModelPinned(name, action string) string {
 	return fmt.Sprintf("/models/toggle-pinned/%s/%s", url.PathEscape(name), url.PathEscape(action))
+}
+
+func routeNodeSplitServer(id string) string {
+	return "/api/nodes/" + url.PathEscape(id) + "/split-server"
 }
 
 func routeNodeVRAMBudget(id string) string {
