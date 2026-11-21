@@ -1223,6 +1223,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/addons/host-grants/queue": {
+            "post": {
+                "description": "Administrators only, from their own browser session (same-origin fetch, X-LocalAI-Confirm equal to \"queue\"). API keys, bearer tokens, MCP sessions and tool calls are refused with 403 not_human_surface. Each item carries what host-grants/install carries for an install from a library: the release, and the approval of its preview (digest, ticked operations, grants revision and the preview nonce). The owner checks each approval now and records it; the install then runs in the background, in order, on the queue of backend operations and within its limit, as an operation of /api/operations (the owner installs one add-on at a time), with its phase and its downloaded bytes. Cancel it there (POST /api/operations/{jobID}/cancel) while it waits or downloads. The install never turns the add-on on. When the verified package asks for host access that the preview did not show, the install stops and asks for a new review (the operation fails and a notification says so); nothing is granted. Items are answered one by one: a refused item carries the error of host-grants/install and does not stop the others. Queued installs that have not finished when the owner restarts are failed with the code interrupted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Addons"
+                ],
+                "summary": "Queue add-on installs with the host access the administrator approved (browser session)",
+                "parameters": [
+                    {
+                        "description": "Installs to queue",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/addons.HostGrantsQueueBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "One answer per item",
+                        "schema": {
+                            "$ref": "#/definitions/addons.HostGrantsQueueResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed request",
+                        "schema": {
+                            "$ref": "#/definitions/addons.AddonErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Named authentication required",
+                        "schema": {
+                            "$ref": "#/definitions/addons.AddonErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not a human surface (not_human_surface) or administration denied",
+                        "schema": {
+                            "$ref": "#/definitions/addons.AddonErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Addons or the operation queue are unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/addons.AddonErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/addons/host-grants/{addonId}": {
             "put": {
                 "description": "Administrators only, from their own browser session (X-LocalAI-Confirm equal to the add-on ID). operationId is optional (the host makes one); send your own to make a retry the same change. ops is the full set the add-on keeps: operations left out are revoked, new ones must be declared by the installed manifest, registered by the host and not denied (403 blocked_by_policy). Grants made by the policy file or flags are not editable here. keep names held blanket grants to relabel as the administrator's own. revision is the revision the caller read; a stale one is 409 revision_conflict. Takes effect for the next call of the add-on with no restart.",
@@ -3398,7 +3456,7 @@ const docTemplate = `{
         },
         "/api/addons/{id}/upgrade": {
             "post": {
-                "description": "Administrators only, from their own browser session (same-origin fetch, X-LocalAI-Confirm equal to the operationId). The only action that applies an update. It carries the digest of the installed package the caller saw (expectedDigest) and the digest of the candidate the check resolved (candidateDigest). The owner re-resolves the library the add-on came from and refuses, before it records anything, an installed package that is not the expected one (409 stale_installed), a candidate that is not the one it resolves now (409 candidate_changed), an incompatible candidate (409 incompatible), a rewritten immutable version (409 integrity_error) and the same transition under another operation ID (409 upgrade_conflict). It never changes the library or the channel. The upgrade then follows the lifecycle of an add-on: the candidate is staged and verified, the data is backed up and migrated when the add-on has any, and the new generation is published only when it starts. A failure or cancellation keeps the last good generation or leaves an explicit recovery state; the previous installation is never deleted. Repeating the operationId returns the recorded result and never runs again; after outcome_unknown read operation-status with the same operationId. No MCP tool maps to this route.",
+                "description": "Administrators only, from their own browser session (same-origin fetch, X-LocalAI-Confirm equal to the operationId). The only action that applies an update. With the operation queue (the normal server) the upgrade is recorded and answered at once in the accepted phase, with jobId, the operation of /api/operations that runs it in the background on the queue of backend operations; cancel it there while it waits or downloads. It carries the digest of the installed package the caller saw (expectedDigest) and the digest of the candidate the check resolved (candidateDigest). The owner re-resolves the library the add-on came from and refuses, before it records anything, an installed package that is not the expected one (409 stale_installed), a candidate that is not the one it resolves now (409 candidate_changed), an incompatible candidate (409 incompatible), a rewritten immutable version (409 integrity_error) and the same transition under another operation ID (409 upgrade_conflict). It never changes the library or the channel. The upgrade then follows the lifecycle of an add-on: the candidate is staged and verified, the data is backed up and migrated when the add-on has any, and the new generation is published only when it starts. A failure or cancellation keeps the last good generation or leaves an explicit recovery state; the previous installation is never deleted. Repeating the operationId returns the recorded result and never runs again; after outcome_unknown read operation-status with the same operationId. No MCP tool maps to this route.",
                 "consumes": [
                     "application/json"
                 ],
@@ -8102,9 +8160,9 @@ const docTemplate = `{
         },
         "/api/chats/notifications": {
             "get": {
-                "description": "The inbox: one item for each run of a trigger that finished, failed or needs you. Newest first. It also returns the number unread and the total kept.",
+                "description": "The inbox: backend updates, finished operations, and one item for each run of a trigger that finished, failed or needs you. Newest first. It also returns the number unread and the total kept. Works with the chats on or off; the same routes also answer under /api/chats/notifications while the chats are on.",
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "List your notifications.",
                 "parameters": [
@@ -8133,7 +8191,7 @@ const docTemplate = `{
             "delete": {
                 "description": "Name the ids, or pass all to empty your inbox; with all, read_only keeps the unread ones. Only your own notifications are touched.",
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Delete notifications.",
                 "parameters": [
@@ -8166,7 +8224,7 @@ const docTemplate = `{
         "/api/chats/notifications/count": {
             "get": {
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Count unread notifications.",
                 "responses": {
@@ -8181,12 +8239,12 @@ const docTemplate = `{
         },
         "/api/chats/notifications/events": {
             "get": {
-                "description": "Server-sent events: one notification event for each new inbox item, with the same fields as the list, and a notifications_changed event when notifications were read or deleted, so a client reads the list again. Live only; list the inbox for what came before.",
+                "description": "Server-sent events: one notification event for each new inbox item, with the same fields as the list, and a notifications_changed event when notifications were read or deleted, so a client reads the list again. Live only; list the inbox for what came before. In a cluster the events of every frontend reach every stream.",
                 "produces": [
                     "text/event-stream"
                 ],
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Stream your notifications.",
                 "responses": {
@@ -8203,7 +8261,7 @@ const docTemplate = `{
             "post": {
                 "description": "Name the ids, or pass all. Opening a chat marks its notifications read by itself.",
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Mark notifications read.",
                 "parameters": [
@@ -9617,7 +9675,7 @@ const docTemplate = `{
             "get": {
                 "description": "The VAPID public key a browser needs to subscribe to push for your notifications. 409 when the server cannot keep subscriptions (no database and no data path).",
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Get the browser push key.",
                 "responses": {
@@ -9634,7 +9692,7 @@ const docTemplate = `{
             "post": {
                 "description": "Pass the endpoint and keys of a browser PushSubscription. A notification is then pushed to that browser with its title and link only. The endpoint must be an https address on the public internet. At most 10 browsers per user; the oldest go first.",
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Subscribe a browser to push.",
                 "parameters": [
@@ -9662,7 +9720,7 @@ const docTemplate = `{
             },
             "delete": {
                 "tags": [
-                    "chats"
+                    "notifications"
                 ],
                 "summary": "Unsubscribe a browser from push.",
                 "parameters": [
@@ -14589,6 +14647,33 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/models/config/{id}": {
+            "post": {
+                "description": "Removed. Always answers 410 Gone with a Link header to POST /api/models/upgrade/{name}; use that route with config_only true to apply the gallery config of an installed model. This answer stays for one release, then the route goes away.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Removed: rewrite a model config from the gallery",
+                "deprecated": true,
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gallery model ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "410": {
+                        "description": "Removed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.RemovedRouteResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/models/recommended": {
             "get": {
                 "description": "Returns the curated models for the hardware tier of the machine, best first, with the context window each would be installed with and whether it fits. Every signed-in user may read it; installing stays admin-only. The hardware is the host, or the best single node of a cluster.",
@@ -14914,6 +14999,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/models/updates": {
+            "get": {
+                "description": "Every model installed from a gallery, with its state: up-to-date, update-available, edited (the update would overwrite keys a person changed; editedKeys lists them), unknown (reason says why), gone (no gallery lists the entry), held (the owner holds this version) or failed (the last upgrade was rolled back; upgrade has the error). needsPerson marks what the Updates page counts: models never update automatically. What the galleries offer is as of the last check; the hold flag, an edit and an upgrade show at once. Every frontend of a cluster gives the same answer.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "List the model updates",
+                "responses": {
+                    "200": {
+                        "description": "Response",
+                        "schema": {
+                            "$ref": "#/definitions/modelupdates.Snapshot"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/updates/check": {
+            "post": {
+                "description": "Reads every gallery index again (not the copies of the last hour), compares each installed gallery model with its entry, waits for the check (at most 60 seconds) and returns the new data. One frontend of a cluster checks at a time; a request that arrives while another check runs waits for that check. A call within 15 seconds of the last check is answered from it with throttled set. A failed check shows as an error in the state of the gallery source and keeps the previous list. Installs nothing.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Check for model updates now",
+                "responses": {
+                    "200": {
+                        "description": "Response",
+                        "schema": {
+                            "$ref": "#/definitions/modelupdates.Snapshot"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/upgrade/{name}": {
+            "post": {
+                "description": "Queues an upgrade and returns its operation; follow it on status_url or /api/operations. The upgrade checks the backend, the free disk and the files other models share, downloads the changed files beside the old ones and verifies their sha256, stops the model, switches the files and the config, and loads the new version as a check. A failed load puts the old version back (state failed, with the error and a retry). The old files are kept until removed with POST /api/models/{name}/remove-old. Keys a person edited are kept; an edited key the update also changes needs a choice in choices, or the request is refused with 409 and the keys. A held model is refused with 409; release the hold first. Nothing upgrades without this request.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Upgrade a model to what its gallery entry installs now",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Installed model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Options",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Operation",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not installed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "409": {
+                        "description": "Running, held, or edited keys need a choice",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "422": {
+                        "description": "Not installed from a gallery with a recorded origin",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    }
+                }
+            }
+        },
         "/api/models/vram-estimate": {
             "post": {
                 "description": "Estimates VRAM based on model weight files at multiple context sizes",
@@ -15061,6 +15232,187 @@ const docTemplate = `{
                         "description": "The job table could not be read",
                         "schema": {
                             "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/{name}/adopt": {
+            "post": {
+                "description": "A model installed before LocalAI recorded the origin of gallery installs shows as unknown in GET /api/models/updates. Adopt records the gallery entry it came from, the files it has and what the gallery would write as its config, so the next check compares it like any other model. The model config on disk is not changed: a key changed by hand reads as an edit. Without a body the entry is found by the model's names, and only when exactly one gallery lists it; otherwise the answer lists the candidates (gallery@entry) and the request must name the gallery (and the entry). Refused with 409 when the model already records its origin, an upgrade runs, or more than one gallery matches; with 422 when the model has no record of a gallery install or no gallery entry matches.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Track the updates of a model installed by an earlier release",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Installed model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Gallery and entry",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelAdoptRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Adopted",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelAdoptResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not installed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "409": {
+                        "description": "Already adopted, busy, or more than one candidate",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "422": {
+                        "description": "No record of a gallery install, or no candidate",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/{name}/hold": {
+            "put": {
+                "description": "With hold true the model is reported as held and offered no update until the hold is cleared. Only the gallery file changes: the model config, its revision and the loaded model stay as they are, and a reinstall keeps the hold. Refused with 409 while an upgrade of the model runs.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Hold a model at its installed version",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Installed model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Hold or release",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelHoldRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The hold",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelHoldResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not installed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "409": {
+                        "description": "An upgrade runs",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "422": {
+                        "description": "Not installed from a gallery with a recorded origin",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/{name}/remove-old": {
+            "post": {
+                "description": "Deletes the old files that the last upgrade of the model kept (retainedFiles of GET /api/models/updates). Only after a confirmed upgrade; refused with 409 while an upgrade runs or when there is nothing to remove. A kept file that another model now uses is not deleted. The model config does not change.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Remove the old version of an upgraded model",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Installed model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Removed files",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelRemoveOldResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not installed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "409": {
+                        "description": "Nothing to remove, an upgrade runs, or a file is shared",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models/{name}/upgrade/retry": {
+            "post": {
+                "description": "Runs the last upgrade of the model again, with its options and choices, toward what the gallery entry installs now. Refused with 409 when the last upgrade did not fail or the model is held.",
+                "tags": [
+                    "models"
+                ],
+                "summary": "Retry a failed model upgrade",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Installed model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Operation",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not installed",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
+                        }
+                    },
+                    "409": {
+                        "description": "Nothing to retry, held, or an upgrade runs",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ModelUpgradeError"
                         }
                     }
                 }
@@ -15439,6 +15791,215 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications": {
+            "get": {
+                "description": "The inbox: backend updates, finished operations, and one item for each run of a trigger that finished, failed or needs you. Newest first. It also returns the number unread and the total kept. Works with the chats on or off; the same routes also answer under /api/chats/notifications while the chats are on.",
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "List your notifications.",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "only the unread ones",
+                        "name": "unread",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "most items to return (default 50, at most 500)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The notifications",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationList"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Name the ids, or pass all to empty your inbox; with all, read_only keeps the unread ones. Only your own notifications are touched.",
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Delete notifications.",
+                "parameters": [
+                    {
+                        "description": "ids, or all",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationsDelete"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The number still unread and how many were deleted",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationCount"
+                        }
+                    },
+                    "400": {
+                        "description": "The request is not valid",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/count": {
+            "get": {
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Count unread notifications.",
+                "responses": {
+                    "200": {
+                        "description": "The number unread",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationCount"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/events": {
+            "get": {
+                "description": "Server-sent events: one notification event for each new inbox item, with the same fields as the list, and a notifications_changed event when notifications were read or deleted, so a client reads the list again. Live only; list the inbox for what came before. In a cluster the events of every frontend reach every stream.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Stream your notifications.",
+                "responses": {
+                    "200": {
+                        "description": "An event stream",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotification"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/push/key": {
+            "get": {
+                "description": "The VAPID public key a browser needs to subscribe to push for your notifications. 409 when the server cannot keep subscriptions (no database and no data path).",
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Get the browser push key.",
+                "responses": {
+                    "200": {
+                        "description": "The key",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsPushKey"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/push/subscribe": {
+            "post": {
+                "description": "Pass the endpoint and keys of a browser PushSubscription. A notification is then pushed to that browser with its title and link only. The endpoint must be an https address on the public internet. At most 10 browsers per user; the oldest go first.",
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Subscribe a browser to push.",
+                "parameters": [
+                    {
+                        "description": "the browser's subscription",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsPushSubscription"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Subscribed"
+                    },
+                    "400": {
+                        "description": "The request is not valid",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Unsubscribe a browser from push.",
+                "parameters": [
+                    {
+                        "description": "the endpoint",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsPushUnsubscribe"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Unsubscribed"
+                    },
+                    "400": {
+                        "description": "The request is not valid",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/read": {
+            "post": {
+                "description": "Name the ids, or pass all. Opening a chat marks its notifications read by itself.",
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Mark notifications read.",
+                "parameters": [
+                    {
+                        "description": "ids or all",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationsRead"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The number still unread",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ChatsNotificationCount"
+                        }
+                    },
+                    "400": {
+                        "description": "The request is not valid",
+                        "schema": {
+                            "$ref": "#/definitions/schema.ErrorResponse"
                         }
                     }
                 }
@@ -19506,6 +20067,45 @@ const docTemplate = `{
                 }
             }
         },
+        "addons.HostGrantsQueueBody": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gateway.HostGrantsQueueRequest"
+                    }
+                }
+            }
+        },
+        "addons.HostGrantsQueueItem": {
+            "type": "object",
+            "properties": {
+                "addonId": {
+                    "type": "string"
+                },
+                "error": {
+                    "$ref": "#/definitions/addons.AddonError"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "operationId": {
+                    "type": "string"
+                }
+            }
+        },
+        "addons.HostGrantsQueueResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/addons.HostGrantsQueueItem"
+                    }
+                }
+            }
+        },
         "addons.OperationStatus": {
             "type": "object",
             "properties": {
@@ -20536,8 +21136,12 @@ const docTemplate = `{
                 "count": {
                     "type": "integer"
                 },
+                "error": {
+                    "description": "Error is why the latest fetch failed, as the owner log says it. It is\nempty when the fetch worked. LastSuccess says when the library last\nloaded, if it ever did.",
+                    "type": "string"
+                },
                 "failed": {
-                    "description": "Failed is true when the latest fetch failed; the previous releases are\nnot served in that case.",
+                    "description": "Failed is true when the latest fetch failed; the previous releases are\nnot served in that case. Other libraries are not affected: a listing\nstill answers with what they loaded and names this one in Page.Failed.",
                     "type": "boolean"
                 },
                 "lastSuccess": {
@@ -22557,6 +23161,10 @@ const docTemplate = `{
                 "digest": {
                     "type": "string"
                 },
+                "fromIndex": {
+                    "description": "FromIndex is true when the requested operations come from the library\nindex, with no download. The install then holds the add-on, and asks\nagain, when its verified manifest requests anything not listed here.",
+                    "type": "boolean"
+                },
                 "installed": {
                     "type": "boolean"
                 },
@@ -22588,6 +23196,26 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "title": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "gateway.HostGrantsQueueRequest": {
+            "type": "object",
+            "properties": {
+                "addonId": {
+                    "type": "string"
+                },
+                "approve": {
+                    "$ref": "#/definitions/gateway.HostGrantsApprove"
+                },
+                "operationId": {
+                    "type": "string"
+                },
+                "sourceId": {
                     "type": "string"
                 },
                 "version": {
@@ -24477,6 +25105,183 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "sizeDisplay": {
+                    "type": "string"
+                }
+            }
+        },
+        "modelupdates.FileChange": {
+            "type": "object",
+            "properties": {
+                "change": {
+                    "description": "Change is added, changed or removed.",
+                    "type": "string"
+                },
+                "checksum": {
+                    "description": "Checksum is false for a file the gallery lists without a sha256. The\nupgrade refuses to download weights without one.",
+                    "type": "boolean"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "modelupdates.Item": {
+            "type": "object",
+            "properties": {
+                "availableDigest": {
+                    "type": "string"
+                },
+                "changedFiles": {
+                    "description": "ChangedFiles are the files the update adds, replaces or retires.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/modelupdates.FileChange"
+                    }
+                },
+                "configOnly": {
+                    "description": "ConfigOnly is true when the update changes no file the upgrade must\ndownload: only the model config or the prompt templates.",
+                    "type": "boolean"
+                },
+                "editedKeys": {
+                    "description": "EditedKeys are the keys of the model config a person changed since the\ninstall, by dotted path. Conflict marks the ones the update also\nchanges.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/modelupdates.KeyEdit"
+                    }
+                },
+                "entryName": {
+                    "type": "string"
+                },
+                "error": {
+                    "description": "Error is the error behind a check-failed reason.",
+                    "type": "string"
+                },
+                "gallery": {
+                    "type": "string"
+                },
+                "held": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "description": "ID is \"model:\u003cname\u003e\".",
+                    "type": "string"
+                },
+                "installedDigest": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name is the installed model name.",
+                    "type": "string"
+                },
+                "needsPerson": {
+                    "description": "NeedsPerson is true for an update, an edited update and a failed\nupgrade. Models have no automatic update, so every update needs a\nperson; this is not the backend rule, where the automatic update\nremoves items from the digest.",
+                    "type": "boolean"
+                },
+                "reason": {
+                    "description": "Reason says why the state is unknown.",
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "upgrade": {
+                    "description": "Upgrade is the last or the running upgrade of this model.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/modelupdates.UpgradeStatus"
+                        }
+                    ]
+                }
+            }
+        },
+        "modelupdates.KeyEdit": {
+            "type": "object",
+            "properties": {
+                "conflict": {
+                    "type": "boolean"
+                },
+                "gallery": {},
+                "installed": {
+                    "description": "Installed is the value the install wrote, Mine the value on disk, and\nGallery the value the update would write. A nil value means the key is\nabsent."
+                },
+                "key": {
+                    "type": "string"
+                },
+                "mine": {}
+            }
+        },
+        "modelupdates.Snapshot": {
+            "type": "object",
+            "properties": {
+                "checkedAt": {
+                    "description": "CheckedAt is the end of the last check; zero (omitted) before the\nfirst one.",
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/modelupdates.Item"
+                    }
+                },
+                "sources": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/backendupdates.Source"
+                    }
+                },
+                "throttled": {
+                    "description": "Throttled is set when a check-now call was answered from a check that\nended a few seconds before.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "modelupdates.UpgradeStatus": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "configOnly": {
+                    "type": "boolean"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "fromDigest": {
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note says how the upgrade ran when that differs from what was asked\n(a canary strategy runs as stop and start until canary is available).",
+                    "type": "string"
+                },
+                "opId": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "removableOld": {
+                    "type": "boolean"
+                },
+                "retainedFiles": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "toDigest": {
+                    "type": "string"
+                },
+                "updatedAt": {
                     "type": "string"
                 }
             }
@@ -32817,6 +33622,26 @@ const docTemplate = `{
                 "channel_label": {
                     "type": "string"
                 },
+                "channel_ref": {
+                    "description": "ChannelRef and ChatRef are the channel ID (target channel) or the chat\n(target origin), shortened: never a whole ID.",
+                    "type": "string"
+                },
+                "chat_ref": {
+                    "type": "string"
+                },
+                "connection_addon": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "description": "ConnectionID, ConnectionKind, ConnectionKindTitle and ConnectionAddon\nsay which connection the channel or chat belongs to and which service it\nis. ConnectionID is empty when the connection is gone.",
+                    "type": "string"
+                },
+                "connection_kind": {
+                    "type": "string"
+                },
+                "connection_kind_title": {
+                    "type": "string"
+                },
                 "connection_name": {
                     "description": "ConnectionName is the name the owner gave the connection of the channel,\nfor a trigger that was proposed in Studio and reports there.",
                     "type": "string"
@@ -32826,6 +33651,10 @@ const docTemplate = `{
                 },
                 "mode": {
                     "description": "Mode is when a run reports: always (the default), on_change (only when\nthe answer differs from the run before) or on_problem (only when a run\nfails).",
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State says whether the destination can receive a report now: ok, off\n(the connection is switched off), gone (deleted), unavailable (its\nadd-on does not run or it cannot receive reports), no_channel (the\nchannel is not listed and approved any more) or blocked (the owner does\nnot let the connection write there). Empty for the inbox.",
                     "type": "string"
                 },
                 "target": {
@@ -35258,6 +36087,37 @@ const docTemplate = `{
                 }
             }
         },
+        "schema.ModelAdoptRequest": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "description": "Entry names the gallery entry, when it differs from the model's name.",
+                    "type": "string"
+                },
+                "gallery": {
+                    "description": "Gallery names the gallery the model came from.",
+                    "type": "string"
+                }
+            }
+        },
+        "schema.ModelAdoptResponse": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "type": "string"
+                },
+                "filesMatch": {
+                    "description": "FilesMatch is true when the model has the files the entry lists now;\nfalse means the next check offers an update.",
+                    "type": "boolean"
+                },
+                "gallery": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "schema.ModelCapabilities": {
             "type": "object",
             "properties": {
@@ -35317,6 +36177,25 @@ const docTemplate = `{
                     }
                 },
                 "object": {
+                    "type": "string"
+                }
+            }
+        },
+        "schema.ModelHoldRequest": {
+            "type": "object",
+            "properties": {
+                "hold": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "schema.ModelHoldResponse": {
+            "type": "object",
+            "properties": {
+                "hold": {
+                    "type": "boolean"
+                },
+                "name": {
                     "type": "string"
                 }
             }
@@ -35430,6 +36309,88 @@ const docTemplate = `{
                 },
                 "total_files": {
                     "type": "integer"
+                }
+            }
+        },
+        "schema.ModelRemoveOldResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "description": "Errors say why files stayed. Set when only some files could be removed.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kept": {
+                    "description": "Kept are the old files that stayed, listed for a later removal. Set\nwhen only some files could be removed.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "removed": {
+                    "description": "Removed are the old files that were deleted, relative to the models\ndirectory.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "schema.ModelUpgradeError": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "schema.ModelUpgradeRequest": {
+            "type": "object",
+            "properties": {
+                "choices": {
+                    "description": "Choices give, for each key a person edited that the update also\nchanges (the conflicts of GET /api/models/updates), \"mine\" to keep the\nedit or \"gallery\" to take the new value, by dotted key. The upgrade is\nrefused while a conflict has no choice.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "config_only": {
+                    "description": "ConfigOnly applies the new model config and prompt templates and\ndownloads nothing. It fails when the update needs new files.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "schema.ModelUpgradeResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "jobID": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "status_url": {
+                    "type": "string"
                 }
             }
         },
@@ -37016,6 +37977,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "schema.RemovedRouteResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "replacement": {
                     "type": "string"
                 }
             }

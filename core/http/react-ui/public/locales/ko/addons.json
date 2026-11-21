@@ -118,6 +118,9 @@
     "emptyBody": "이 목록은 비어 있습니다.",
     "emptyFiltered": "검색과 일치하는 항목이 없습니다. 검색어나 라이브러리를 바꿔 보세요.",
     "emptyTitle": "표시할 항목이 없습니다",
+    "failedBody": "불러온 라이브러리는 아래에 표시됩니다.",
+    "failedTitle_one": "라이브러리 1개를 읽을 수 없습니다.",
+    "failedTitle_other": "라이브러리 {{count}}개를 읽을 수 없습니다.",
     "libraries": "라이브러리",
     "loading": "결과를 불러오는 중",
     "next": "다음 페이지",
@@ -205,10 +208,12 @@
       "format": "A library index uses the shared library entry shape. A gallery index is a model or backend gallery, as the gallery flags name it.",
       "mirrors": "Fallback addresses, one per line, tried in order when the main address cannot be fetched."
     },
+    "lastGood": "마지막으로 불러옴 {{when}}",
     "lastRefresh": "{{when}}에 새로 고침, 항목 {{count}}개",
     "lead": "라이브러리는 애드온, 백엔드 또는 모델을 나열하는 색인입니다. 자격 증명은 여기에 입력하지 않습니다. 비공개 애드온 라이브러리는 관리자가 이 서버에 구성한 자격 증명을 이름으로 가리킵니다.",
     "listLabel": "라이브러리",
     "loading": "라이브러리를 불러오는 중",
+    "neverLoaded": "불러온 적 없음",
     "notRefreshed": "아직 새로 고치지 않음",
     "reference": "자격 증명 참조: {{name}}",
     "refresh": "새로 고침",
@@ -1058,5 +1063,28 @@
       "off": "꺼짐",
       "attention": "설정 필요"
     }
+  },
+  "queue": {
+    "title": "설치 대기열",
+    "select": "대기열에 추가",
+    "selectNamed": "{{name}}을(를) 설치 대기열에 추가",
+    "inQueue": "대기 중",
+    "selectionLabel": "설치하려고 선택한 애드온",
+    "selected": "선택됨: {{count}}",
+    "reviewPicked": "검토 후 대기열에 추가",
+    "clear": "선택 해제",
+    "position": "애드온 {{number}} / {{total}}.",
+    "batchNote": "마지막 항목까지 마치기 전에는 아무것도 대기열에 들어가지 않습니다.",
+    "confirmBody": "소스 {{library}}의 버전 {{version}}을(를) 설치 대기열에 추가합니다. 백그라운드에서 다운로드하고 설치 전에 검증합니다. 켜지지는 않습니다.",
+    "add": "대기열에 추가",
+    "acceptNext": "수락하고 다음",
+    "acceptLast": "수락하고 모두 대기열에 추가",
+    "skip": "건너뛰기",
+    "unpinned": "이 개발용 항목은 특정 패키지에 고정되어 있지 않습니다. 소스가 지금 제공하는 것을 그대로 설치합니다.",
+    "reviewTitle": "검토가 필요합니다.",
+    "reviewBody": "패키지가 승인한 것보다 많은 호스트 접근을 요구합니다. 설치 전에 목록을 다시 확인하세요.",
+    "refused": "{{name}}을(를) 대기열에 추가하지 못했습니다. {{reason}}",
+    "noAnswer": "서버가 이 애드온에 응답하지 않았습니다.",
+    "notInLibrary": "이 애드온은 더 이상 라이브러리에 없습니다."
   }
 }

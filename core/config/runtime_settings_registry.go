@@ -914,6 +914,11 @@ var runtimeSettingsFields = []fieldSpec{
 		func(o *ApplicationConfig) string { return o.Branding.FaviconFile },
 		func(o *ApplicationConfig, v string) { o.Branding.FaviconFile = v },
 		fromFileAlways()),
+	field("default_language",
+		func(s *RuntimeSettings) **string { return &s.DefaultLanguage },
+		func(o *ApplicationConfig) string { return o.Branding.DefaultLanguage },
+		func(o *ApplicationConfig, v string) { o.Branding.DefaultLanguage = v },
+		fromFileAlways()),
 
 	field("mitm_listen",
 		func(s *RuntimeSettings) **string { return &s.MITMListen },

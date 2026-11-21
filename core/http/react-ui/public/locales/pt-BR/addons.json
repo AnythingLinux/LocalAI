@@ -118,6 +118,9 @@
     "emptyBody": "Esta lista está vazia.",
     "emptyFiltered": "Nada corresponde à pesquisa. Mude as palavras ou a biblioteca.",
     "emptyTitle": "Nada para mostrar",
+    "failedBody": "As bibliotecas que foram carregadas estão listadas abaixo.",
+    "failedTitle_one": "Não foi possível ler uma biblioteca.",
+    "failedTitle_other": "Não foi possível ler {{count}} bibliotecas.",
     "libraries": "Bibliotecas",
     "loading": "Carregando resultados",
     "next": "Próxima página",
@@ -205,10 +208,12 @@
       "format": "A library index uses the shared library entry shape. A gallery index is a model or backend gallery, as the gallery flags name it.",
       "mirrors": "Fallback addresses, one per line, tried in order when the main address cannot be fetched."
     },
+    "lastGood": "Último carregamento {{when}}",
     "lastRefresh": "Atualizada {{when}}, {{count}} entradas",
     "lead": "Uma biblioteca é um índice que lista complementos, backends ou modelos. Credenciais nunca são digitadas aqui: uma biblioteca privada de complementos indica uma credencial que um administrador configurou neste servidor.",
     "listLabel": "Bibliotecas",
     "loading": "Carregando bibliotecas",
+    "neverLoaded": "Nunca carregada",
     "notRefreshed": "Ainda não atualizada",
     "reference": "Referência de credencial: {{name}}",
     "refresh": "Atualizar",
@@ -1058,5 +1063,28 @@
       "off": "Desligada",
       "attention": "Precisa de configuração"
     }
+  },
+  "queue": {
+    "title": "Fila de instalação",
+    "select": "Adicionar à fila",
+    "selectNamed": "Adicionar {{name}} à fila de instalação",
+    "inQueue": "Na fila",
+    "selectionLabel": "Complementos selecionados para instalar",
+    "selected": "Selecionados: {{count}}",
+    "reviewPicked": "Revisar e enfileirar",
+    "clear": "Limpar",
+    "position": "Complemento {{number}} de {{total}}.",
+    "batchNote": "Nada entra na fila até você terminar o último.",
+    "confirmBody": "A versão {{version}} da fonte {{library}} é adicionada à fila de instalação. Ela é baixada em segundo plano e verificada antes de ser instalada. Ela não é ativada.",
+    "add": "Adicionar à fila",
+    "acceptNext": "Aceitar e seguir",
+    "acceptLast": "Aceitar e enfileirar tudo",
+    "skip": "Pular",
+    "unpinned": "Esta entrada de desenvolvimento não está presa a um pacote. Ela instala o que a fonte serve agora.",
+    "reviewTitle": "Revisão necessária.",
+    "reviewBody": "O pacote pede mais acesso ao host do que você aprovou. Confira a lista de novo antes da instalação.",
+    "refused": "{{name}} não entrou na fila. {{reason}}",
+    "noAnswer": "O servidor não respondeu sobre este complemento.",
+    "notInLibrary": "Este complemento não está mais nas suas bibliotecas."
   }
 }

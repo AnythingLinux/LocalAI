@@ -116,6 +116,21 @@ func applyModelLoadCooldown(err error, code int, c echo.Context) int {
 	return http.StatusServiceUnavailable
 }
 
+// modelUpgradeRetryAfter is the Retry-After of a load refused while the model
+// is upgraded: the switch of the files takes seconds, not minutes.
+const modelUpgradeRetryAfter = "10"
+
+// applyModelLoadsBlocked maps a load refused during a model upgrade to 503 with
+// a Retry-After header: the model comes back once its files are switched.
+func applyModelLoadsBlocked(err error, code int, c echo.Context) int {
+	var blocked *model.ModelLoadsBlockedError
+	if !errors.As(err, &blocked) {
+		return code
+	}
+	c.Response().Header().Set("Retry-After", modelUpgradeRetryAfter)
+	return http.StatusServiceUnavailable
+}
+
 func applyBackendAdmission(err error, code int, c echo.Context) int {
 	var capacityErr *corebackend.BackendAdmissionError
 	if !errors.As(err, &capacityErr) {
@@ -262,6 +277,7 @@ func API(application *application.Application) (*echo.Echo, error) {
 				code = he.Code
 			}
 			code = applyModelLoadCooldown(err, code, c)
+			code = applyModelLoadsBlocked(err, code, c)
 			code = applyBackendAdmission(err, code, c)
 			code = applyNoAvailableNodes(err, code)
 
@@ -297,6 +313,7 @@ func API(application *application.Application) (*echo.Echo, error) {
 				code = he.Code
 			}
 			code = applyModelLoadCooldown(err, code, c)
+			code = applyModelLoadsBlocked(err, code, c)
 			code = applyBackendAdmission(err, code, c)
 			// Opaque errors deliberately withhold the body, so a still-loading
 			// model gets the status and Retry-After but no progress detail.
@@ -493,6 +510,26 @@ func API(application *application.Application) (*echo.Echo, error) {
 	requestExtractor := httpMiddleware.NewRequestExtractor(application.ModelConfigLoader(), application.ModelLoader(), application.ApplicationConfig())
 	requestExtractor.SetFailoverManager(application.FailoverManager())
 
+	// Create opcache for tracking UI operations (used by both UI and LocalAI routes)
+	var opcache *galleryop.OpCache
+	if !application.ApplicationConfig().DisableWebUI {
+		opcache = galleryop.NewOpCache(application.GalleryService())
+		// In distributed mode, wire the NATS client + gallery store so this
+		// replica's OpCache stays in sync with peers — without this the
+		// /api/operations endpoint returns whatever this single replica
+		// happened to admit, and a load-balanced UI poll alternates between
+		// "operation visible" and "operation gone" between replicas.
+		if d := application.Distributed(); d != nil {
+			opcache.SetMessagingClient(d.Nats)
+			if d.DistStores != nil && d.DistStores.Gallery != nil {
+				opcache.SetGalleryStore(d.DistStores.Gallery)
+			}
+			if err := opcache.Start(application.ApplicationConfig().Context); err != nil {
+				xlog.Warn("OpCache distributed subscribe failed; running standalone", "error", err)
+			}
+		}
+	}
+
 	// Register auth routes (login, callback, API keys, user management)
 	routes.RegisterAuthRoutes(e, application)
 	// Routes of paired clients: pairing, client keys and what a client key may reach.
@@ -504,7 +541,7 @@ func API(application *application.Application) (*echo.Echo, error) {
 	addonsOn := application.ApplicationConfig().Addons.Enabled
 	if addonsOn {
 		gate := httpMiddleware.RequireAddonsFeature(application)
-		routes.RegisterAddonRoutes(e, application, gate)
+		routes.RegisterAddonRoutes(e, application, opcache, gate)
 		if err := routes.RegisterAddonNavigationRoutes(e, application, gate); err != nil {
 			return nil, fmt.Errorf("register the add-on navigation routes: %w", err)
 		}
@@ -526,26 +563,6 @@ func API(application *application.Application) (*echo.Echo, error) {
 	routes.RegisterMiddlewareRoutes(e, application)
 
 	routes.RegisterElevenLabsRoutes(e, requestExtractor, application.ModelConfigLoader(), application.ModelLoader(), application.ApplicationConfig(), application.AuthDB())
-
-	// Create opcache for tracking UI operations (used by both UI and LocalAI routes)
-	var opcache *galleryop.OpCache
-	if !application.ApplicationConfig().DisableWebUI {
-		opcache = galleryop.NewOpCache(application.GalleryService())
-		// In distributed mode, wire the NATS client + gallery store so this
-		// replica's OpCache stays in sync with peers — without this the
-		// /api/operations endpoint returns whatever this single replica
-		// happened to admit, and a load-balanced UI poll alternates between
-		// "operation visible" and "operation gone" between replicas.
-		if d := application.Distributed(); d != nil {
-			opcache.SetMessagingClient(d.Nats)
-			if d.DistStores != nil && d.DistStores.Gallery != nil {
-				opcache.SetGalleryStore(d.DistStores.Gallery)
-			}
-			if err := opcache.Start(application.ApplicationConfig().Context); err != nil {
-				xlog.Warn("OpCache distributed subscribe failed; running standalone", "error", err)
-			}
-		}
-	}
 
 	mcpMw := auth.RequireFeature(application.AuthDB(), auth.FeatureMCP)
 	routes.RegisterLocalAIRoutes(e, requestExtractor, application.ModelConfigLoader(), application.ModelLoader(), application.ApplicationConfig(), application.GalleryService(), opcache, application.TemplatesEvaluator(), application, adminMiddleware, mcpMw)
@@ -806,6 +823,8 @@ func API(application *application.Application) (*echo.Echo, error) {
 	})
 
 	routes.RegisterStudioRoutes(e, application.StudioService(), routes.NewStudioModelChecker(application), adminMiddleware, routes.NewStudioOAuth(application))
+	// The notification center works with the chats on or off.
+	routes.RegisterNotificationRoutes(e, application.Notifier(), application.NotifyPusher(), application.StudioService() != nil)
 
 	// The studio loop reaches the model through this router, in memory.
 	if sp := application.StudioProvider(); sp != nil {

@@ -118,6 +118,9 @@
     "emptyBody": "Esta lista está vacía.",
     "emptyFiltered": "Nada coincide con la búsqueda. Cambia las palabras o la biblioteca.",
     "emptyTitle": "Nada que mostrar",
+    "failedBody": "Abajo se muestran las bibliotecas que se cargaron.",
+    "failedTitle_one": "No se pudo leer una biblioteca.",
+    "failedTitle_other": "No se pudieron leer {{count}} bibliotecas.",
     "libraries": "Bibliotecas",
     "loading": "Cargando resultados",
     "next": "Página siguiente",
@@ -205,10 +208,12 @@
       "format": "A library index uses the shared library entry shape. A gallery index is a model or backend gallery, as the gallery flags name it.",
       "mirrors": "Fallback addresses, one per line, tried in order when the main address cannot be fetched."
     },
+    "lastGood": "Última carga {{when}}",
     "lastRefresh": "Actualizada {{when}}, {{count}} entradas",
     "lead": "Una biblioteca es un índice que enumera complementos, backends o modelos. Las credenciales nunca se escriben aquí: una biblioteca privada de complementos nombra una credencial que un administrador configuró en este servidor.",
     "listLabel": "Bibliotecas",
     "loading": "Cargando bibliotecas",
+    "neverLoaded": "Nunca cargada",
     "notRefreshed": "Aún sin actualizar",
     "reference": "Referencia de credencial: {{name}}",
     "refresh": "Actualizar",
@@ -1058,5 +1063,28 @@
       "off": "Desactivada",
       "attention": "Falta configurarla"
     }
+  },
+  "queue": {
+    "title": "Cola de instalación",
+    "select": "Añadir a la cola",
+    "selectNamed": "Añadir {{name}} a la cola de instalación",
+    "inQueue": "En cola",
+    "selectionLabel": "Complementos seleccionados para instalar",
+    "selected": "Seleccionados: {{count}}",
+    "reviewPicked": "Revisar y poner en cola",
+    "clear": "Quitar selección",
+    "position": "Complemento {{number}} de {{total}}.",
+    "batchNote": "No se pone nada en cola hasta que termines con el último.",
+    "confirmBody": "La versión {{version}} de la fuente {{library}} se añade a la cola de instalación. Se descarga en segundo plano y se comprueba antes de instalarla. No se activa.",
+    "add": "Añadir a la cola",
+    "acceptNext": "Aceptar y siguiente",
+    "acceptLast": "Aceptar y poner todo en cola",
+    "skip": "Omitir",
+    "unpinned": "Esta entrada de desarrollo no está fijada a un paquete. Instala lo que la fuente sirva ahora.",
+    "reviewTitle": "Revisión necesaria.",
+    "reviewBody": "El paquete pide más acceso al host del que aprobaste. Revisa la lista otra vez antes de instalarlo.",
+    "refused": "{{name}} no se puso en cola. {{reason}}",
+    "noAnswer": "El servidor no respondió sobre este complemento.",
+    "notInLibrary": "Este complemento ya no está en tus bibliotecas."
   }
 }

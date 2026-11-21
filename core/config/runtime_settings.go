@@ -204,6 +204,7 @@ type RuntimeSettings struct {
 	LogoFile           *string `json:"logo_file,omitempty"`
 	LogoHorizontalFile *string `json:"logo_horizontal_file,omitempty"`
 	FaviconFile        *string `json:"favicon_file,omitempty"`
+	DefaultLanguage    *string `json:"default_language,omitempty"`
 
 	// Cloud-proxy MITM listener. MITMCADir is intentionally NOT
 	// exposed at runtime — the CA dir is a startup-only path and

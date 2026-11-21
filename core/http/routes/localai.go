@@ -129,7 +129,7 @@ func RegisterLocalAIRoutes(router *echo.Echo,
 		router.POST("/backends/delete/:name", backendGalleryEndpointService.DeleteBackendEndpoint(), adminMiddleware)
 		router.GET("/backends", backendGalleryEndpointService.ListBackendsEndpoint(), adminMiddleware)
 		router.GET("/backends/available", backendGalleryEndpointService.ListAvailableBackendsEndpoint(appConfig.SystemState, ClusterCapabilityProviderFor(app), ClusterInstalledProviderFor(app)), adminMiddleware)
-		router.GET("/backends/known", backendGalleryEndpointService.ListKnownBackendsEndpoint(appConfig.SystemState), adminMiddleware)
+		router.GET("/backends/known", backendGalleryEndpointService.ListKnownBackendsEndpoint(appConfig.SystemState, ClusterInstalledProviderFor(app)), adminMiddleware)
 		router.GET("/backends/galleries", backendGalleryEndpointService.ListBackendGalleriesEndpoint(), adminMiddleware)
 		router.GET("/backends/jobs/:uuid", backendGalleryEndpointService.GetOpStatusEndpoint(), adminMiddleware)
 		router.GET("/backends/upgrades", backendGalleryEndpointService.GetUpgradesEndpoint(), adminMiddleware)
@@ -139,6 +139,22 @@ func RegisterLocalAIRoutes(router *echo.Echo,
 		router.GET("/backends/updates", localai.BackendUpdatesEndpoint(app.UpgradeChecker()), adminMiddleware)
 		router.POST("/backends/updates/check", localai.CheckBackendUpdatesEndpoint(app.UpgradeChecker()), adminMiddleware)
 		router.POST("/backends/upgrade/:name", backendGalleryEndpointService.UpgradeBackendEndpoint(), adminMiddleware, middleware.RequireBackendInstallEnabled(appConfig))
+		// Model updates: the read model and a check that waits. Models never
+		// update automatically; the check installs nothing.
+		modelUpdates := func() localai.ModelUpdatesProvider {
+			if svc := app.ModelUpdates(); svc != nil {
+				return svc
+			}
+			return nil
+		}
+		router.GET("/api/models/updates", localai.ModelUpdatesEndpoint(modelUpdates), adminMiddleware)
+		router.POST("/api/models/updates/check", localai.CheckModelUpdatesEndpoint(modelUpdates), adminMiddleware)
+		upgradeDeps := localai.ModelUpgradeDeps{Gallery: galleryService, Upgrader: app.ModelUpgrader, Updates: app.ModelUpdates}
+		router.POST("/api/models/upgrade/:name", localai.UpgradeModelEndpoint(upgradeDeps), adminMiddleware)
+		router.POST("/api/models/:name/upgrade/retry", localai.RetryModelUpgradeEndpoint(upgradeDeps), adminMiddleware)
+		router.POST("/api/models/:name/remove-old", localai.RemoveOldModelVersionEndpoint(upgradeDeps), adminMiddleware)
+		router.PUT("/api/models/:name/hold", localai.SetModelHoldEndpoint(upgradeDeps), adminMiddleware)
+		router.POST("/api/models/:name/adopt", localai.AdoptModelEndpoint(upgradeDeps), adminMiddleware)
 		// Custom model import endpoint
 		router.POST("/models/import", localai.ImportModelEndpoint(cl, galleryService, appConfig, opcache), adminMiddleware)
 

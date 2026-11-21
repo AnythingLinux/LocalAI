@@ -92,7 +92,8 @@ type RunCMD struct {
 	DownloadStagingPath         string   `env:"LOCALAI_DOWNLOAD_STAGING_PATH,DOWNLOAD_STAGING_PATH" type:"path" default:"${basepath}/downloading" help:"Path where in-flight downloads are staged before extraction" group:"storage"`
 	ArtifactDownloadConcurrency int      `env:"LOCALAI_ARTIFACT_DOWNLOAD_CONCURRENCY" help:"How many files of a model artifact to download at once. 1 (the default) downloads sequentially. Raising it helps artifacts split into many files on a fast link, at the cost of more concurrent load on the models volume" group:"storage" default:"1"`
 
-	MaxConcurrentBackendOperations int `env:"LOCALAI_MAX_CONCURRENT_BACKEND_OPERATIONS" help:"How many backend install, upgrade and delete operations run at once. 1 (the default) runs them one after the other. Operations on the same backend always run one at a time" group:"backends" default:"1"`
+	MaxConcurrentModelOperations   int `env:"LOCALAI_MAX_CONCURRENT_MODEL_OPERATIONS" help:"How many model install, upgrade and delete operations run at once. The default is 2; 1 runs them one after the other. Operations on the same model never overlap" group:"models" default:"2"`
+	MaxConcurrentBackendOperations int `env:"LOCALAI_MAX_CONCURRENT_BACKEND_OPERATIONS" help:"How many backend install, upgrade and delete operations run at once. The default is 2; 1 runs them one after the other. Operations on the same backend never overlap. In distributed mode it also bounds how many nodes one operation is sent to at the same time" group:"backends" default:"2"`
 
 	GeneratedContentPath         string        `env:"LOCALAI_GENERATED_CONTENT_PATH,GENERATED_CONTENT_PATH" type:"path" default:"${generatedcontentpath}" help:"Location for generated content (e.g. images, audio, videos)" group:"storage"`
 	UploadPath                   string        `env:"LOCALAI_UPLOAD_PATH,UPLOAD_PATH" type:"path" default:"${uploadpath}" help:"Path to store uploads from files api" group:"storage"`
@@ -225,6 +226,7 @@ type RunCMD struct {
 	OIDCIssuer           string `env:"LOCALAI_OIDC_ISSUER" help:"OIDC issuer URL for auto-discovery" group:"auth"`
 	OIDCClientID         string `env:"LOCALAI_OIDC_CLIENT_ID" help:"OIDC Client ID (auto-enables auth)" group:"auth"`
 	OIDCClientSecret     string `env:"LOCALAI_OIDC_CLIENT_SECRET" help:"OIDC Client Secret" group:"auth"`
+	DefaultLanguage      string `env:"LOCALAI_DEFAULT_LANGUAGE" help:"Default UI language code (e.g. en, it, es, de, zh-CN, id, ko, pt-BR, fr, bn) when no user preference is set" group:"api"`
 	ExternalBaseURL      string `env:"LOCALAI_BASE_URL" help:"External base URL of this instance (e.g. https://localhost:8080). Used for OAuth callbacks and self-referential links (generated images/videos, job status). When unset, derived from X-Forwarded-Proto/Host or Forwarded headers." group:"api"`
 	AuthAdminEmail       string `env:"LOCALAI_ADMIN_EMAIL" help:"Email address to auto-promote to admin role" group:"auth"`
 	AuthRegistrationMode string `env:"LOCALAI_REGISTRATION_MODE" default:"open" help:"Registration mode: 'open' (default), 'approval', or 'invite' (invite code required)" group:"auth"`
@@ -434,6 +436,7 @@ func (r *RunCMD) Run(ctx *cliContext.Context) (result error) {
 		config.WithContext(runCtx),
 		config.WithArtifactDownloadConcurrency(r.ArtifactDownloadConcurrency),
 		config.WithMaxConcurrentBackendOperations(r.MaxConcurrentBackendOperations),
+		config.WithMaxConcurrentModelOperations(r.MaxConcurrentModelOperations),
 		config.WithModelArtifactMaterializer(modelartifacts.NewDefaultManager(
 			modelartifacts.WithHuggingFaceToken(r.HFToken),
 			modelartifacts.WithDownloadConcurrency(r.ArtifactDownloadConcurrency),
@@ -860,6 +863,9 @@ func (r *RunCMD) Run(ctx *cliContext.Context) (result error) {
 
 	// Applied unconditionally: the external base URL governs all self-referential
 	// links (not just OAuth callbacks), so it must take effect even when auth is off.
+	if r.DefaultLanguage != "" {
+		opts = append(opts, config.WithDefaultLanguage(r.DefaultLanguage))
+	}
 	if r.ExternalBaseURL != "" {
 		opts = append(opts, config.WithExternalBaseURL(r.ExternalBaseURL))
 	}
