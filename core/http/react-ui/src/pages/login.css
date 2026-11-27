@@ -1,7 +1,7 @@
 /* ==========================================================================
    Sign-in, registration and the invite page
 
-   One screen: a brand panel with the instance's name and tagline, and
+   One screen: a brand panel with the instance's logo, name and tagline, and
    one form beside it with one field per step. Built on the kit's field, input
    and button classes. The page has no gradient, no glass and no coloured edge.
    ========================================================================== */
@@ -10,6 +10,7 @@
 
 .lg-brand { display: flex; flex-direction: column; justify-content: space-between; gap: var(--dk-space-6); padding: var(--dk-space-6) var(--dk-space-7); background: var(--dk-inset); border-right: 1px solid var(--dk-edge); }
 .lg-brand__top { display: flex; align-items: center; gap: var(--dk-space-3); }
+.lg-brand__logo { width: 32px; height: 32px; border-radius: var(--dk-radius-1); object-fit: contain; }
 .lg-brand__name { font: var(--dk-weight-bold) var(--dk-text-17) / 1.2 var(--dk-font-display); letter-spacing: -.01em; }
 .lg-brand__tagline { margin: auto 0; max-width: 16ch; font: var(--dk-weight-bold) var(--dk-text-32) / 1.15 var(--dk-font-display); letter-spacing: -.02em; text-wrap: balance; overflow-wrap: anywhere; }
 .lg-brand:not(:has(.lg-brand__tagline)) { justify-content: flex-start; }
