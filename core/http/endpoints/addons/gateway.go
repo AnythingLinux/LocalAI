@@ -12,13 +12,12 @@ import (
 	"github.com/mudler/LocalAI/core/services/addons/gateway"
 	"github.com/mudler/LocalAI/core/services/addons/packages"
 	"github.com/mudler/LocalAI/core/services/galleryop"
+	"github.com/mudler/LocalAI/core/services/upgraderun"
 	"github.com/mudler/LocalAI/pkg/addons/contract"
 	"github.com/mudler/xlog"
 	"gorm.io/gorm"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 )
 
 // AddonError is the error object of every failure response of the addon endpoints.
@@ -74,6 +73,10 @@ type settings struct {
 	// queue and opcache run the queued installs; see WithOperationQueue.
 	queue   *galleryop.GalleryService
 	opcache *galleryop.OpCache
+	// runs and upgrader make the upgrade route start an upgrade run of one
+	// item; see WithUpgradeRuns.
+	runs     func() *upgraderun.Service
+	upgrader *QueuedUpgrader
 }
 
 // SelectionGuard says whether the person may select a resource for a
@@ -447,7 +450,7 @@ func BrowserProtection() echo.MiddlewareFunc {
 				// that strips it, or any page that sends none, drive the cookie.
 				site := h.Get("Sec-Fetch-Site")
 				if site == "" {
-					if !sameHostBrowserRequest(c.Request()) {
+					if !auth.SameHostBrowserRequest(c.Request()) {
 						return failure(c, 403, "Same-origin browser request required")
 					}
 				} else if site != "same-origin" {
@@ -457,22 +460,4 @@ func BrowserProtection() echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
-}
-
-// sameHostBrowserRequest reports whether Origin, or failing that Referer,
-// names the same host and port as the request. A malformed or "null" value
-// never matches. When Origin is present, Referer is not consulted.
-func sameHostBrowserRequest(r *http.Request) bool {
-	source := r.Header.Get("Origin")
-	if source == "" {
-		source = r.Header.Get("Referer")
-	}
-	if source == "" {
-		return false
-	}
-	u, err := url.Parse(source)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	return strings.EqualFold(u.Host, r.Host)
 }

@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { createPortal } from 'react-dom'
 // eslint-disable-next-line no-unused-vars
 import { Link, useParams, useNavigate, useLocation, useOutletContext, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -30,7 +29,7 @@ import UnsavedChangesGuard from '../components/UnsavedChangesGuard'
 import { CAP_CHAT } from '../utils/capabilities'
 import Icon from '../components/Icon'
 // eslint-disable-next-line no-unused-vars
-import { Button, Callout, LoadError, Page, Segmented, SkeletonRows } from '../components/ui'
+import { Button, Callout, LoadError, Page, Segmented, SkeletonRows, Tabs, Tag } from '../components/ui'
 // eslint-disable-next-line no-unused-vars
 import AgentFolderDialog from '../components/agents/AgentFolderDialog'
 // eslint-disable-next-line no-unused-vars
@@ -55,6 +54,9 @@ import { Chip } from '../components/agents/AgentBits'
 // eslint-disable-next-line no-unused-vars
 import { SwitchRow } from '../components/chat/SwitchList'
 // eslint-disable-next-line no-unused-vars
+import AgentPlugins from '../components/agents/AgentPlugins'
+import { useAuth } from '../context/AuthContext'
+// eslint-disable-next-line no-unused-vars
 import AgentWizard from './AgentWizard'
 import { useAgentAbilities } from '../hooks/useAgentAbilities'
 import { useActiveProjects } from '../hooks/useActiveProjects'
@@ -70,13 +72,14 @@ import AgentEffective from '../components/agents/AgentEffective'
 import AgentTryIt from '../components/agents/AgentTryIt'
 // eslint-disable-next-line no-unused-vars
 import ActionMenu from '../components/ActionMenu'
-import { useSheetFocus } from '../components/agents/useSheetFocus'
+// eslint-disable-next-line no-unused-vars
+import SideSheet from '../components/SideSheet'
 
 // The cards of the page, in order. `bare` parts have no heading of their own:
 // the card heading says what they are. `export` exists only for a saved agent.
 const GROUPS = [
   { id: 'identity', icon: 'info', parts: ['BasicInfo', 'ModelSettings', 'PromptsGoals', 'Connected'], bare: true },
-  { id: 'capabilities', icon: 'plug', parts: ['Uses', 'Skills', 'Files'] },
+  { id: 'capabilities', icon: 'plug', parts: ['Uses', 'Skills', 'Plugins', 'Files'] },
   { id: 'memory', icon: 'memory', parts: ['Notes', 'MemorySettings'] },
   { id: 'effective', icon: 'eye', parts: ['Effective'], bare: true },
   { id: 'advanced', icon: 'server', parts: ['export'], collapsible: true },
@@ -215,6 +218,9 @@ function AgentEditor() {
   }, [id, isEdit, imported, attempt, search])
 
   const updateField = useCallback((name, value) => setForm(prev => ({ ...prev, [name]: value })), [])
+  // The Plugins grant list shows to someone with the plugins feature.
+  const { hasFeature } = useAuth()
+  const pluginsOn = hasFeature('plugins')
 
   // A new agent takes the project of the field: the project is read for the
   // folders and the limits, and the files mode starts at write.
@@ -421,6 +427,7 @@ function AgentEditor() {
       state = 'ready'
     }
     else if (s.id === 'MemorySettings') { keys = ['collections']; summary = countOf(form.collections.length, 'create.countCollections'); state = form.collections.length ? 'ready' : 'empty' }
+    else if (s.id === 'Plugins') { const n = (form.plugins || []).length; keys = ['plugins']; summary = countOf(n, 'create.countPlugins'); state = n ? 'ready' : 'empty' }
     else if (s.id === 'Skills') { keys = ['skills']; summary = countOf(form.skills.length, 'create.countSkills'); state = form.skills.length ? 'ready' : 'empty' }
     else if (s.id === 'Uses') {
       keys = ['builtins_off', 'builtins_on', 'builtins', 'addons', 'mcp_servers', 'network', 'sandbox_profile', 'connections', 'resources']
@@ -537,9 +544,9 @@ function AgentEditor() {
               <>
                 <p className="aed-caps__lead">{t('create.modelCaps')}</p>
                 <ul className="aed-caps" data-testid="agent-model-caps">
-                  <li className="aed-caps__chip">{t('create.modelChat')}</li>
+                  <Tag as="li">{t('create.modelChat')}</Tag>
                   {modelCaps(chosenModel).filter(c => c !== 'chat').map(c => (
-                    <li key={c} className="aed-caps__chip">{c === 'vision' ? t('home:picker.vision') : t(`home:picker.cap.${c}`, { defaultValue: c })}</li>
+                    <Tag as="li" key={c}>{c === 'vision' ? t('home:picker.vision') : t(`home:picker.cap.${c}`, { defaultValue: c })}</Tag>
                   ))}
                 </ul>
               </>
@@ -608,6 +615,8 @@ function AgentEditor() {
             </div>
           </>
         )
+      case 'Plugins':
+        return <AgentPlugins value={form.plugins || []} onChange={(ids) => updateField('plugins', ids)} />
       case 'Effective':
         return <AgentEffective lines={effective} dirty={dirty} isEdit={isEdit} hasConnections={access.length > 0} onGoTo={goTo} />
       case 'Connected':
@@ -663,7 +672,7 @@ function AgentEditor() {
   const saveLabel = isEdit ? t('create.save') : imported ? t('create.titleImport') : t('create.titleCreate')
   const headName = (form.name || '').trim()
   // A card with nothing in it (Advanced holds only the export of a saved agent) is not shown.
-  const visibleGroups = GROUPS.map(g => ({ ...g, parts: g.parts.filter(pid => pid !== 'export' || (isEdit && savedConfig)) })).filter(g => g.parts.length > 0)
+  const visibleGroups = GROUPS.map(g => ({ ...g, parts: g.parts.filter(pid => (pid !== 'export' || (isEdit && savedConfig)) && (pid !== 'Plugins' || (pluginsOn && !projectAgent))) })).filter(g => g.parts.length > 0)
 
   // A card needs the person when one of its parts does.
   const groupNeeds = (g) => g.parts.some(pid => pid !== 'export' && foldInfo({ id: pid }).state === 'needs')
@@ -885,76 +894,66 @@ function LimitNote({ t }) {
 // eslint-disable-next-line no-unused-vars
 function PreviewSheet({ tab, onTab, payload, diff, isEdit, saving, onSave, onClose }) {
   const { t } = useTranslation('agents')
-  const { sheetRef, closeRef } = useSheetFocus(onClose)
-
   const shown = useCallback((v) => displayValue(maskSecrets(v)), [])
   const json = useMemo(() => JSON.stringify(maskSecrets(payload), null, 2), [payload])
 
-  return createPortal(
-    <div className="dk-sheet-veil" data-state="open" onMouseDown={onClose}>
-      <div
-        ref={sheetRef}
-        className="dk-sheet dk-sheet--wide"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="agent-preview-title"
-        data-state="open"
-        data-testid="agent-preview"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <span className="dk-sheet-grip" aria-hidden="true" />
-        <div className="dk-sheet-head">
-          <div>
-            <h2 className="dk-sheet-title" id="agent-preview-title">{t('create.previewTitle')}</h2>
-            <p className="dk-sheet-desc">{isEdit ? t('create.previewEdit') : t('create.previewNew')}</p>
-          </div>
-          <button ref={closeRef} type="button" className="dk-btn dk-btn--ghost dk-btn--icon dk-btn--sm" aria-label={t('create.close')} onClick={onClose}>
-            <Icon name="close" />
-          </button>
-        </div>
-        <div className="dk-sheet-body">
-          <div className="dk-tabs ag-sheet-tabs" role="tablist" aria-label={t('create.previewTitle')}>
-            <button type="button" role="tab" className="dk-tab" aria-selected={tab === 'config'} onClick={() => onTab('config')}>{t('create.tabConfig')}</button>
-            <button type="button" role="tab" className="dk-tab" aria-selected={tab === 'changes'} onClick={() => onTab('changes')}>
-              {t('create.tabChanges')}{diff.length > 0 && <span className="dk-badge dk-badge--count">{diff.length}</span>}
-            </button>
-          </div>
-          {tab === 'config' ? (
-            <div className="dk-tabpanel" role="tabpanel" data-testid="agent-preview-config">
-              <p className="ag-note ag-note--bottom">{t('create.configNote')}</p>
-              <pre className="ag-pre">{json}</pre>
-            </div>
-          ) : (
-            <div className="dk-tabpanel" role="tabpanel" data-testid="agent-preview-changes">
-              {diff.length === 0 ? (
-                <p className="ag-note">{isEdit ? t('create.noChanges') : t('create.nothingSet')}</p>
-              ) : (
-                <>
-                  {!isEdit && <p className="ag-note ag-note--bottom">{t('create.allNew')}</p>}
-                  <div className="ag-diff">
-                    {diff.map(d => (
-                      <div key={d.key} className="ag-diff__item" data-key={d.key}>
-                        <span className="ag-diff__key">{d.key}</span>
-                        <div className="ag-diff__pair">
-                          <div className="ag-diff__side" data-side="before"><span className="ag-diff__label">{isEdit ? t('create.saved') : t('create.default')}</span>{shown(d.before) || t('create.empty')}</div>
-                          <div className="ag-diff__side" data-side="after"><span className="ag-diff__label">{t('create.new')}</span>{shown(d.after) || t('create.empty')}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="dk-sheet-foot">
+  return (
+    <SideSheet
+      wide
+      title={t('create.previewTitle')}
+      description={isEdit ? t('create.previewEdit') : t('create.previewNew')}
+      closeLabel={t('create.close')}
+      labelId="agent-preview-title"
+      testId="agent-preview"
+      initialFocus="close"
+      onClose={onClose}
+      footer={(
+        <>
           <button type="button" className="dk-btn dk-btn--secondary" onClick={onClose}>{t('create.close')}</button>
           <button type="button" className="dk-btn dk-btn--primary" disabled={saving} onClick={onSave}>
             {isEdit ? t('create.save') : t('create.titleCreate')}
           </button>
+        </>
+      )}
+    >
+      <Tabs
+        className="ag-sheet-tabs"
+        label={t('create.previewTitle')}
+        idPrefix="agent-preview"
+        value={tab}
+        onChange={onTab}
+        items={[
+          { id: 'config', label: t('create.tabConfig') },
+          { id: 'changes', label: t('create.tabChanges'), ...(diff.length > 0 ? { count: diff.length } : {}) },
+        ]}
+      />
+      {tab === 'config' ? (
+        <div className="dk-tabpanel" role="tabpanel" id="agent-preview-panel-config" aria-labelledby="agent-preview-tab-config" data-testid="agent-preview-config">
+          <p className="ag-note ag-note--bottom">{t('create.configNote')}</p>
+          <pre className="ag-pre">{json}</pre>
         </div>
-      </div>
-    </div>,
-    document.body,
+      ) : (
+        <div className="dk-tabpanel" role="tabpanel" id="agent-preview-panel-changes" aria-labelledby="agent-preview-tab-changes" data-testid="agent-preview-changes">
+          {diff.length === 0 ? (
+            <p className="ag-note">{isEdit ? t('create.noChanges') : t('create.nothingSet')}</p>
+          ) : (
+            <>
+              {!isEdit && <p className="ag-note ag-note--bottom">{t('create.allNew')}</p>}
+              <div className="ag-diff">
+                {diff.map(d => (
+                  <div key={d.key} className="ag-diff__item" data-key={d.key}>
+                    <span className="ag-diff__key">{d.key}</span>
+                    <div className="ag-diff__pair">
+                      <div className="ag-diff__side" data-side="before"><span className="ag-diff__label">{isEdit ? t('create.saved') : t('create.default')}</span>{shown(d.before) || t('create.empty')}</div>
+                      <div className="ag-diff__side" data-side="after"><span className="ag-diff__label">{t('create.new')}</span>{shown(d.after) || t('create.empty')}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </SideSheet>
   )
 }

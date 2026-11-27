@@ -16,7 +16,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/routing"
-	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/mudler/xlog"
@@ -82,6 +81,13 @@ type Config struct {
 	RelayRetry time.Duration
 	// MDNS finds peers on the local network.
 	MDNS bool
+	// NoReservations keeps AutoRelay off: the host holds no relay
+	// reservation, so no peer can reach it through a relay. It is for hosts
+	// that only dial out. A hole punch does not need one on the dialling
+	// side: the peer that holds the reservation starts it, and this host
+	// needs only its listen addresses and the addresses that its peers
+	// observe.
+	NoReservations bool
 	// PortMapping asks the router for a port mapping (UPnP, NAT-PMP).
 	PortMapping bool
 	// Gate admits peers and streams. Nil means an empty Allowlist: no
@@ -89,6 +95,10 @@ type Config struct {
 	Gate Gate
 	// UserAgent is sent in the identify protocol. Empty means "localai".
 	UserAgent string
+	// PrivateHints lets Dial use hint relays at private and loopback
+	// addresses. By default Dial uses only the public IP addresses of a
+	// hint (see WithHints). Only tests and closed labs set it.
+	PrivateHints bool
 }
 
 // Host is a libp2p host with LocalAI's admission rules. It is safe for
@@ -97,12 +107,17 @@ type Host struct {
 	h     host.Host
 	dht   atomic.Pointer[dht.IpfsDHT]
 	gate  Gate
-	mdns  mdns.Service
+	disco *mdnsRunner
+	addrs *addrWatcher
 	punch *punchTracer
+	hints *hintRelays
 	reach atomic.Int32
 	sub   event.Subscription
+	// redial is nil when the gate cannot name the paired peers.
+	redial *redialer
 
-	static []peer.AddrInfo
+	static       []peer.AddrInfo
+	privateHints bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -141,12 +156,14 @@ func New(ctx context.Context, cfg Config) (*Host, error) {
 
 	hctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	n := &Host{
-		gate:      gate,
-		punch:     newPunchTracer(),
-		static:    cfg.StaticRelays,
-		ctx:       hctx,
-		cancel:    cancel,
-		listeners: map[protocol.ID]*listener{},
+		gate:         gate,
+		punch:        newPunchTracer(),
+		hints:        newHintRelays(),
+		static:       cfg.StaticRelays,
+		privateHints: cfg.PrivateHints,
+		ctx:          hctx,
+		cancel:       cancel,
+		listeners:    map[protocol.ID]*listener{},
 	}
 	cm, err := connmgr.NewConnManager(connLowWater, connHighWater, connmgr.WithGracePeriod(connGracePeriod))
 	if err != nil {
@@ -157,7 +174,7 @@ func New(ctx context.Context, cfg Config) (*Host, error) {
 		libp2p.Identity(key),
 		libp2p.UserAgent(ua),
 		libp2p.ConnectionManager(cm),
-		libp2p.ConnectionGater(connGater{gate: gate}),
+		libp2p.ConnectionGater(connGater{gate: gate, hints: n.hints}),
 		// The relay transport dials and accepts relayed connections.
 		// AutoRelay needs it set before the libp2p defaults are applied.
 		libp2p.EnableRelay(),
@@ -173,7 +190,7 @@ func New(ctx context.Context, cfg Config) (*Host, error) {
 	if cfg.PortMapping {
 		opts = append(opts, libp2p.NATPortMap())
 	}
-	if len(cfg.StaticRelays) > 0 || cfg.PublicDHT {
+	if !cfg.NoReservations && (len(cfg.StaticRelays) > 0 || cfg.PublicDHT) {
 		opts = append(opts, libp2p.EnableAutoRelayWithPeerSource(n.relayCandidates, autoRelayOptions(cfg)...))
 	}
 	if cfg.PublicDHT {
@@ -219,7 +236,7 @@ func (n *Host) start(cfg Config, boot []peer.AddrInfo) error {
 			n.punch.forget(c.RemotePeer())
 		}
 	}})
-	if len(cfg.StaticRelays) > 0 {
+	if len(cfg.StaticRelays) > 0 && !cfg.NoReservations {
 		if err := kickAutoRelay(n.h); err != nil {
 			return err
 		}
@@ -229,21 +246,35 @@ func (n *Host) start(cfg Config, boot []peer.AddrInfo) error {
 			return fmt.Errorf("p2pnet: bootstrap DHT: %w", err)
 		}
 	}
+	w := newAddrWatcher(liveAddrSet(n.h))
+	n.addrs = w
+	if err := n.startRedial(w); err != nil {
+		return fmt.Errorf("p2pnet: start redial: %w", err)
+	}
 	// Start-up does not wait for bootstrap peers or relays: a slow or dead
 	// peer must not delay the server.
 	n.connectAll(boot)
 	n.connectAll(cfg.StaticRelays)
 	if cfg.MDNS {
 		// mDNS only finds peers on the local network, so a host that cannot
-		// start it still works. A host with no listen address, such as one in
-		// mode connect, has no address to announce and the start fails.
-		svc := mdns.NewMdnsService(n.h, mdnsServiceName, mdnsNotifee{n: n})
-		if err := svc.Start(); err != nil {
-			xlog.Warn("p2p: local network discovery (mDNS) is off", "error", err)
-		} else {
-			n.mdns = svc
-		}
+		// start it still works. A host with no listen address has no address
+		// to announce, and discovery waits for one.
+		n.startMDNS(w)
 	}
+	return n.watchAddrs(w)
+}
+
+// watchAddrs runs w until the host closes. It checks the addresses after
+// each EvtLocalAddressesUpdated event and at every poll.
+func (n *Host) watchAddrs(w *addrWatcher) error {
+	sub, err := n.h.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+	if err != nil {
+		return fmt.Errorf("p2pnet: watch addresses: %w", err)
+	}
+	n.wg.Go(func() {
+		defer func() { _ = sub.Close() }()
+		w.run(n.ctx, sub.Out())
+	})
 	return nil
 }
 
@@ -299,6 +330,9 @@ func (n *Host) Revoke(p peer.ID) {
 	if d, ok := n.gate.(interface{ Disallow(peer.ID) }); ok {
 		d.Disallow(p)
 	}
+	if n.redial != nil {
+		n.redial.forget(p)
+	}
 	if err := n.h.Network().ClosePeer(p); err != nil {
 		xlog.Debug("p2p: close revoked peer", "peer", p.String(), "error", err)
 	}
@@ -322,8 +356,8 @@ func (n *Host) Close() error {
 	}
 	n.cancel()
 	var errs []error
-	if n.mdns != nil {
-		errs = append(errs, n.mdns.Close())
+	if n.disco != nil {
+		errs = append(errs, n.disco.close())
 	}
 	if d := n.dht.Load(); d != nil {
 		errs = append(errs, d.Close())

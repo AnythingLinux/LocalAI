@@ -16,6 +16,7 @@ import (
 	"github.com/mudler/LocalAI/pkg/downloader"
 	"github.com/mudler/LocalAI/pkg/functions"
 	hfapi "github.com/mudler/LocalAI/pkg/huggingface-api"
+	"github.com/mudler/LocalAI/pkg/oci"
 	"github.com/mudler/xlog"
 	"go.yaml.in/yaml/v2"
 )
@@ -40,6 +41,7 @@ func (i *LlamaCPPImporter) AdditionalBackends() []KnownBackendEntry {
 		{Name: "ik-llama-cpp", Modality: "text", Description: "GGUF drop-in replacement for llama-cpp with ik-quants"},
 		{Name: "turboquant", Modality: "text", Description: "GGUF drop-in replacement for llama-cpp with TurboQuant optimizations"},
 		{Name: "vllm-cpp", Modality: "text", Description: "vLLM-style continuous-batching engine (vllm.cpp) consuming GGUF, by the LocalAI team"},
+		{Name: "colibri", Modality: "text", Description: "colibri (experimental): very large mixture-of-experts GGUF models with the experts streamed from disk"},
 	}
 }
 
@@ -106,14 +108,26 @@ func (i *LlamaCPPImporter) Import(details Details) (gallery.ModelConfig, error) 
 	// repo-root URI (no file component) it would be the repo name, so the HF
 	// branch below re-derives the name from the selected GGUF file instead
 	// (issue #10587).
+	isOllama := strings.HasPrefix(details.URI, downloader.OllamaPrefix)
+	var ollamaNames ollamaImportNames
+	if isOllama {
+		ollamaNames = newOllamaImportNames(details.URI)
+	}
+
 	name, nameProvided := preferencesMap["name"].(string)
 	if !nameProvided {
 		name = filepath.Base(details.URI)
+		if isOllama {
+			name = ollamaNames.model
+		}
 	}
 
 	description, ok := preferencesMap["description"].(string)
 	if !ok {
 		description = "Imported from " + details.URI
+		if isOllama {
+			description = "Imported from Ollama: " + ollamaNames.display
+		}
 	}
 
 	preferedQuantizations, _ := preferencesMap["quantizations"].(string)
@@ -140,7 +154,7 @@ func (i *LlamaCPPImporter) Import(details Details) (gallery.ModelConfig, error) 
 	backend := "llama-cpp"
 	if b, ok := preferencesMap["backend"].(string); ok {
 		switch b {
-		case "ik-llama-cpp", "turboquant", "vllm-cpp":
+		case "ik-llama-cpp", "turboquant", "vllm-cpp", "colibri":
 			backend = b
 		}
 	}
@@ -168,7 +182,10 @@ func (i *LlamaCPPImporter) Import(details Details) (gallery.ModelConfig, error) 
 	// engine-side parsing), so the tokenizer-template config carries over
 	// verbatim. Only `use_jinja` is dropped - that option is a llama-cpp
 	// backend knob with no meaning for vllm-cpp.
-	if backend == "vllm-cpp" {
+	// colibri works the same way: its gateway renders the chat template and
+	// parses the model's tool-call format, and the backend imports the GGUF
+	// into a colibri model directory on the first load.
+	if backend == "vllm-cpp" || backend == "colibri" {
 		modelConfig.Options = nil
 	}
 
@@ -189,9 +206,33 @@ func (i *LlamaCPPImporter) Import(details Details) (gallery.ModelConfig, error) 
 	var drafter *importedDrafter
 
 	switch {
+	case isOllama:
+		cfg.Files = append(cfg.Files, gallery.File{
+			URI:      details.URI,
+			Filename: ollamaNames.modelFile,
+		})
+		modelConfig.PredictionOptions = schema.PredictionOptions{
+			BasicModelRequest: schema.BasicModelRequest{
+				Model: ollamaNames.modelFile,
+			},
+		}
+		if details.Ollama != nil && details.Ollama.HasProjector {
+			// The projector is a second layer of the same manifest; the
+			// "#projector" selector tells the downloader to fetch it.
+			cfg.Files = append(cfg.Files, gallery.File{
+				URI:      details.URI + "#" + oci.OllamaLayerProjector,
+				Filename: ollamaNames.projectorFile,
+			})
+			modelConfig.MMProj = ollamaNames.projectorFile
+		}
+		// The sampling defaults the model's author shipped. Values the user
+		// gave in the preferences are applied after and win.
+		if details.Ollama != nil {
+			applySamplingDefaults(&modelConfig, details.Ollama.Params, ollamaSamplingKeys)
+		}
+		applySamplingDefaults(&modelConfig, preferencesMap, preferenceSamplingKeys)
 	case uri.LooksLikeOCI():
 		ociName := uri.OCIReference()
-		ociName = strings.TrimPrefix(ociName, downloader.OllamaPrefix)
 		ociName = strings.ReplaceAll(ociName, "/", "__")
 		ociName = strings.ReplaceAll(ociName, ":", "__")
 		cfg.Files = append(cfg.Files, gallery.File{
@@ -330,7 +371,13 @@ func (i *LlamaCPPImporter) Import(details Details) (gallery.ModelConfig, error) 
 	}
 
 	// Apply per-model-family inference parameter defaults
-	config.ApplyInferenceDefaults(&modelConfig, details.URI)
+	if isOllama {
+		// The family table keys on names like "qwen3-8b", which an Ollama
+		// "qwen3:8b" URI does not contain.
+		config.ApplyInferenceDefaults(&modelConfig, details.URI, ollamaNames.model)
+	} else {
+		config.ApplyInferenceDefaults(&modelConfig, details.URI)
+	}
 
 	// Auto-detect Multi-Token Prediction heads (ggml-org/llama.cpp#22673) and
 	// enable speculative decoding. Mirrors the load-time hook so freshly

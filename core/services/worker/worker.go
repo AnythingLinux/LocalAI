@@ -27,6 +27,7 @@ import (
 	"github.com/mudler/LocalAI/pkg/signals"
 	"github.com/mudler/LocalAI/pkg/splitenv"
 	"github.com/mudler/LocalAI/pkg/system"
+	"github.com/mudler/LocalAI/pkg/xsysinfo"
 	"github.com/mudler/xlog"
 )
 
@@ -35,16 +36,20 @@ import (
 // on signals.
 func Run(ctx *cliContext.Context, cfg *Config) error {
 	xlog.Info("Starting worker", "advertise", cfg.advertiseAddr(), "basePort", cfg.effectiveBasePort())
+	// Before any detection (system state, registration, heartbeats), so the
+	// total the frontend sees is the operator's.
+	xsysinfo.ApplyVRAMTotalSetting(cfg.VRAMTotal)
 	if err := cfg.validateFrontend(); err != nil {
 		return err
 	}
 
-	// Fail fast (before prefetch/registration/NATS) when enforcement is on but no
-	// registration token is set: the worker's HTTP file-transfer server fails
-	// open on an empty token (see nodes.checkBearerToken), so refuse to start
-	// rather than register and then die mid-boot.
-	if cfg.RegistrationAuthRequired() && cfg.RegistrationToken == "" {
-		return fmt.Errorf("registration auth is required (LOCALAI_REGISTRATION_REQUIRE_AUTH or LOCALAI_DISTRIBUTED_REQUIRE_AUTH) but LOCALAI_REGISTRATION_TOKEN is empty — refusing to start an unauthenticated file-transfer server")
+	// Fail fast (before prefetch/registration/NATS) when enforcement is on but the
+	// worker has no token to register with: the worker's HTTP file-transfer server
+	// fails open on an empty token (see nodes.checkBearerToken), so refuse to
+	// start rather than register and then die mid-boot. A worker with a join token
+	// gets its data plane token from the frontend, and is checked again below.
+	if cfg.RegistrationAuthRequired() && cfg.RegistrationToken == "" && cfg.JoinToken == "" {
+		return fmt.Errorf("registration auth is required (LOCALAI_REGISTRATION_REQUIRE_AUTH or LOCALAI_DISTRIBUTED_REQUIRE_AUTH) but neither LOCALAI_REGISTRATION_TOKEN nor LOCALAI_JOIN_TOKEN is set — refusing to start an unauthenticated file-transfer server")
 	}
 
 	systemState, err := cfg.systemState()
@@ -55,9 +60,8 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	ml := model.NewModelLoader(systemState)
 	ml.SetBackendLoggingEnabled(true)
 
-	// Register already-installed backends
-	if err := gallery.RegisterBackends(systemState, ml); err != nil {
-		return fmt.Errorf("registering installed backends: %w", err)
+	if err := registerInstalledBackends(systemState, ml); err != nil {
+		return err
 	}
 
 	// Parse galleries config
@@ -105,6 +109,14 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	regClient := &workerregistry.RegistrationClient{
 		FrontendURL:       cfg.RegisterTo,
 		RegistrationToken: cfg.RegistrationToken,
+		JoinToken:         cfg.JoinToken,
+	}
+	if cfg.join == nil {
+		// The own credential of the node lives in the state directory, so that a
+		// restart registers with it and needs no join token.
+		regClient.Credential = &workerregistry.FileCredential{
+			Dir: cfg.dataDir(), FrontendURL: cfg.RegisterTo, NodeName: cfg.nodeName(),
+		}
 	}
 	if cfg.join != nil {
 		// Longer than over TCP: the first call may wait for a hole punch.
@@ -145,6 +157,10 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	}
 	nodeID := res.ID
 	xlog.Info("Registered with frontend", "nodeID", nodeID, "frontend", cfg.RegisterTo, "routes", routes)
+	cfg.dataToken = cmp.Or(regClient.WorkerToken(), workerctl.WorkerAuthToken(cfg.RegistrationToken))
+	if cfg.RegistrationAuthRequired() && cfg.dataToken == "" {
+		return fmt.Errorf("registration auth is required but the frontend gave this worker no data plane token: set a registration token on the frontend — refusing to start an unauthenticated file-transfer server")
+	}
 	heartbeatInterval, err := time.ParseDuration(cfg.HeartbeatInterval)
 	if err != nil && cfg.HeartbeatInterval != "" {
 		xlog.Warn("invalid heartbeat interval, using default 10s", "input", cfg.HeartbeatInterval, "error", err)
@@ -157,7 +173,7 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	httpAddr := cfg.resolveHTTPAddr(bindHost)
 	stagingDir := filepath.Join(cfg.ModelsPath, "..", "staging")
 	cacheDir := filepath.Join(cfg.ModelsPath, "..", "cache")
-	dataDir := filepath.Join(cfg.ModelsPath, "..", "data")
+	dataDir := cfg.dataDir()
 	ephemeralRoots := []string{
 		filepath.Join(stagingDir, "ephemeral"),
 		filepath.Join(cacheDir, "ephemeral"),
@@ -193,7 +209,7 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 		return terr
 	}
 	controlMux := plane.Control()
-	httpServer, err := nodes.StartFileTransferServerWithControl(httpAddr, stagingDir, cfg.ModelsPath, dataDir, cfg.RegistrationToken, config.DefaultMaxUploadSize, readiness, ephemeralCapacity, controlMux, ml.BackendLogs())
+	httpServer, err := nodes.StartFileTransferServerWithControl(httpAddr, stagingDir, cfg.ModelsPath, dataDir, cfg.dataToken, config.DefaultMaxUploadSize, readiness, ephemeralCapacity, controlMux, ml.BackendLogs())
 	if err != nil {
 		return fmt.Errorf("starting HTTP file transfer server: %w", err)
 	}
@@ -206,9 +222,9 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	// manager, which is not a signal.
 	signals.NotifyTermination(sigCh)
 
-	// Set the registration token once before any backends are started
-	if cfg.RegistrationToken != "" {
-		if err := os.Setenv(grpc.AuthTokenEnvVar, cfg.RegistrationToken); err != nil {
+	// Set the data plane token once before any backends are started
+	if cfg.dataToken != "" {
+		if err := os.Setenv(grpc.AuthTokenEnvVar, cfg.dataToken); err != nil {
 			nodes.ShutdownFileTransferServer(httpServer)
 			return fmt.Errorf("setting backend authentication token: %w", err)
 		}
@@ -334,11 +350,45 @@ func Run(ctx *cliContext.Context, cfg *Config) error {
 	<-sigCh
 
 	xlog.Info("Shutting down worker")
+	// Refuse new loads and abort the running ones first, while the routes
+	// still carry the frontend's stops: a load that the frontend is waiting
+	// for is then released in seconds, not after its stop window.
+	supervisor.beginShutdown()
+	abortWait := parseShutdownWindow("LOCALAI_SHUTDOWN_ABORT_WAIT", cfg.ShutdownAbortWait, defaultShutdownAbortWait)
+	aborted, loadsEnded := supervisor.abortLoadOperations(abortWait)
+	if len(aborted) > 0 {
+		xlog.Info("Aborted the loads in progress", "count", len(aborted))
+	}
+	if !loadsEnded {
+		// Telling the frontend the loads ended would let it place a model
+		// again while a process of this worker may still load it.
+		xlog.Warn("Not every load ended in the abort wait; the frontend releases them after their stop window", "abort_wait", abortWait)
+	}
 	shutdownCancel() // stop heartbeat loop immediately
 	<-splitDone
-	regClient.GracefulDeregister(nodeID)
+	regClient.GracefulShutdown(nodeID, workerregistry.ShutdownOptions{
+		LoadsEnded:  loadsEnded,
+		RequestWait: parseShutdownWindow("LOCALAI_SHUTDOWN_REQUEST_WAIT", cfg.ShutdownRequestWait, workerregistry.DefaultShutdownRequestWait),
+		Timeout:     parseShutdownWindow("LOCALAI_SHUTDOWN_TIMEOUT", cfg.ShutdownTimeout, workerregistry.DefaultShutdownTimeout),
+	})
 	supervisor.stopAllBackends(false)
 	nodes.ShutdownFileTransferServer(httpServer)
+	return nil
+}
+
+// registerInstalledBackends cleans what a crash in the middle of a backend
+// install or upgrade left in the backends directory, then registers the
+// installed backends. The worker calls it before it subscribes to install
+// events or serves its control routes, so no install of this process can
+// run at the same time as the sweep. The sweep is best-effort: it logs what
+// it cannot clean and never fails the start.
+func registerInstalledBackends(systemState *system.SystemState, ml *model.ModelLoader) error {
+	if removed, restored := gallery.SweepSwapLeftovers(systemState); len(removed) > 0 || len(restored) > 0 {
+		xlog.Info("Cleaned the backends directory after an interrupted update", "removed", removed, "restored", restored)
+	}
+	if err := gallery.RegisterBackends(systemState, ml); err != nil {
+		return fmt.Errorf("registering installed backends: %w", err)
+	}
 	return nil
 }
 

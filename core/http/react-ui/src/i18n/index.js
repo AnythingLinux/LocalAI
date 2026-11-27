@@ -15,6 +15,7 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'pt-BR', name: 'Português (Brasil)', flag: 'BR' },
   { code: 'fr', name: 'Français', flag: 'FR' },
   { code: 'bn', name: 'বাংলা', flag: 'BN' },
+  { code: 'tr', name: 'Türkçe', flag: 'TR' },
 ]
 
 export const NAMESPACES = [
@@ -40,12 +41,14 @@ export const NAMESPACES = [
   'admin',
   'operate',
   'swarm',
+  'cluster',
   'p2psettings',
   'traffic',
   'usage',
   'addons',
   'upgrade',
   'updates',
+  'viewas',
 ]
 
 i18n

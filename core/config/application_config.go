@@ -105,6 +105,10 @@ type ApplicationConfig struct {
 
 	Addons AddonConfig `json:"-" yaml:"-"`
 
+	// Plugins holds the settings of the plugins in the Claude Code plugin
+	// format.
+	Plugins PluginsConfig `json:"-" yaml:"-"`
+
 	// AddonHostOps maps an add-on ID to the host operation prefixes it may
 	// call. It is startup-only. Nil or empty means no add-on gets a host
 	// operation endpoint.
@@ -273,6 +277,13 @@ type ApplicationConfig struct {
 	AutoUpgradeAddons                           bool
 	PreferDevelopmentBackends                   bool
 
+	// UpgradeRunKeep is the most finished upgrade runs kept. Zero means 200
+	// (upgraderun.DefaultRetention), a negative value keeps any number.
+	UpgradeRunKeep int
+	// UpgradeRunRetentionDays is how long finished upgrade runs are kept.
+	// Zero means 30 days, a negative value keeps them forever.
+	UpgradeRunRetentionDays int
+
 	// RequireBackendIntegrity promotes a missing SHA256 (tarball/HTTP URIs)
 	// or missing verification policy (OCI URIs) from a warning to a hard
 	// failure during backend install/upgrade. Off by default to keep
@@ -303,6 +314,10 @@ type ApplicationConfig struct {
 	SizeAwareEviction        bool          // Evict largest models first rather than least-recently-used (default: false)
 	LRUEvictionMaxRetries    int           // Maximum number of retries when waiting for busy models to become idle (default: 30)
 	LRUEvictionRetryInterval time.Duration // Interval between retries when waiting for busy models (default: 1s)
+	// DisableModelSwap stops a load from unloading another model to make
+	// room. The load waits for the LRU retry window, then fails with a
+	// retryable 503. Stored negated so the zero value keeps swap on.
+	DisableModelSwap bool
 
 	// ModelLoadFailureCooldown is the base cooldown applied after a model load
 	// fails: new load attempts for that model are refused (HTTP 503 + Retry-After)
@@ -381,6 +396,10 @@ type ApplicationConfig struct {
 	// ChatsAutoResume makes the server go on by itself with a chat turn that
 	// a restart interrupted (LOCALAI_CHATS_AUTO_RESUME). Read at startup.
 	ChatsAutoResume bool
+	// ChatsModelLoadWait is how long a chat turn waits, in total, for a model
+	// that is still loading (LOCALAI_CHATS_MODEL_LOAD_WAIT). Zero is the
+	// default of the chats. Read at startup.
+	ChatsModelLoadWait time.Duration
 	// ChatsToolProviders pins, for a built-in chat tool or skill that several
 	// add-ons replace, the add-on that serves it (tool or skill name -> add-on
 	// ID). Tool and skill names never overlap.
@@ -480,6 +499,10 @@ type ApplicationConfig struct {
 	// 0: DefaultChatsMaxIterations. A model's agent.max_iterations wins.
 	// Runtime-settable via /api/settings (chats_max_iterations).
 	ChatsMaxIterations int
+	// ChatsAddonToolLimit is the most add-on tools one chat is offered, 0:
+	// DefaultChatsAddonToolLimit. Runtime-settable via /api/settings
+	// (chats_addon_tool_limit). Guarded by chatsLimitsMu.
+	ChatsAddonToolLimit int
 
 	// ChatsGoalMaxTurns is the most turns the server starts by itself for one
 	// goal of a chat, and ChatsGoalMaxSteps the most model requests the turns
@@ -529,8 +552,18 @@ type ApplicationConfig struct {
 	// at startup or in a later runtime settings change, does not override it.
 	AdminOffByDeprecatedOption bool
 
+	// Incognito is the setting incognito: allow (empty) or forbid. It decides
+	// whether web UI sessions may start incognito conversations. Read at each
+	// request, see IncognitoPolicy.
+	Incognito string
+	// IncognitoMaxLevelName is the setting incognito_max_level: memory-off or
+	// zero-retention (empty). An administrator who needs audit logs allows
+	// memory isolation only. See IncognitoMaxLevel.
+	IncognitoMaxLevelName string
+
 	// ChatsToolSearch is the setting chats_tool_search: whether the large
-	// LocalAI tool groups are replaced by the three tool-search tools. One of
+	// LocalAI tool groups and the deferred add-on tools are replaced by the
+	// three tool-search tools. One of
 	// the ToolSearch* values; empty means auto. Read at each turn.
 	ChatsToolSearch string
 
@@ -904,6 +937,14 @@ func WithSizeAwareEviction(enabled bool) AppOption {
 		o.SizeAwareEviction = enabled
 	}
 }
+
+// DisableModelSwap turns model swap off (see ApplicationConfig.DisableModelSwap).
+var DisableModelSwap = func(o *ApplicationConfig) {
+	o.DisableModelSwap = true
+}
+
+// ModelSwapEnabled reports whether a load may unload another model to make room.
+func (o *ApplicationConfig) ModelSwapEnabled() bool { return !o.DisableModelSwap }
 
 // WithLRUEvictionMaxRetries sets the maximum number of retries when waiting for busy models to become idle
 func WithLRUEvictionMaxRetries(maxRetries int) AppOption {
@@ -1562,11 +1603,23 @@ func WithTriggerRunRetention(keep, days int) AppOption {
 	return func(o *ApplicationConfig) { o.TriggerRunKeep, o.TriggerRunRetentionDays = keep, days }
 }
 
+// WithUpgradeRunRetention sets how many finished upgrade runs are kept, and
+// for how many days.
+func WithUpgradeRunRetention(keep, days int) AppOption {
+	return func(o *ApplicationConfig) { o.UpgradeRunKeep, o.UpgradeRunRetentionDays = keep, days }
+}
+
 // Defaults of the agent jobs.
 const (
 	DefaultAgentJobRetentionDays = 30
 	DefaultMCPCIJobTimeout       = 10 * time.Minute
 )
+
+// WithChatsModelLoadWait sets how long a chat turn waits for a model that is
+// still loading.
+func WithChatsModelLoadWait(d time.Duration) AppOption {
+	return func(o *ApplicationConfig) { o.ChatsModelLoadWait = d }
+}
 
 // WithChatsAutoResume sets whether the server resumes interrupted chat turns
 // by itself.
@@ -1881,6 +1934,33 @@ func (o *ApplicationConfig) EffectiveChatsExtractMaxEntries() int {
 		return n
 	}
 	return DefaultChatsExtractMaxEntries
+}
+
+// Default and bounds of chats_addon_tool_limit, the most add-on tools one chat
+// is offered. Every tool schema is sent to the model on every turn, so a high
+// limit costs context and makes the model choose worse; the floor keeps room
+// for the tools that replace built-in ones (shell, web) and a few add-ons.
+// Each add-on is also limited to 32 tools, whatever this setting says.
+const (
+	DefaultChatsAddonToolLimit = 64
+	MinChatsAddonToolLimit     = 16
+	MaxChatsAddonToolLimit     = 256
+)
+
+func (o *ApplicationConfig) setChatsAddonToolLimit(v int) {
+	o.chatsLimitsMu.Lock()
+	o.ChatsAddonToolLimit = v
+	o.chatsLimitsMu.Unlock()
+}
+
+// EffectiveChatsAddonToolLimit is chats_addon_tool_limit as it applies now.
+func (o *ApplicationConfig) EffectiveChatsAddonToolLimit() int {
+	o.chatsLimitsMu.RLock()
+	defer o.chatsLimitsMu.RUnlock()
+	if o.ChatsAddonToolLimit < MinChatsAddonToolLimit || o.ChatsAddonToolLimit > MaxChatsAddonToolLimit {
+		return DefaultChatsAddonToolLimit
+	}
+	return o.ChatsAddonToolLimit
 }
 
 // DefaultChatsEgressAuditDays is how long the Sandbox network audit keeps a

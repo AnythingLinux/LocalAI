@@ -229,6 +229,15 @@ local-ai run huggingface://TheBloke/phi-2-GGUF/phi-2.Q8_0.gguf
 local-ai run ollama://gemma:2b
 ```
 
+An `ollama://` import works like this:
+
+- The model must be a GGUF file. LocalAI reads the first bytes of the weights before the download and again after it, and refuses anything else with "this model is not a GGUF file".
+- The model name is `<name>-<tag>`, so `ollama://qwen3:8b` becomes `qwen3-8b`. A `library/` prefix is dropped, a `user/model:tag` model becomes `user-model-tag`, and the tag `latest` adds nothing to the name. The weights are saved as `<name>.gguf`.
+- The sampling defaults the model's author published (`temperature`, `top_k`, `top_p`, `min_p`, `repeat_penalty`, `seed`, `num_predict` as `max_tokens`, and `stop` as `stopwords`) become the defaults of the model. Other keys, including `num_ctx`, are ignored. The import preferences `temperature`, `top_k`, `top_p`, `min_p`, `repeat_penalty`, `seed`, `max_tokens` and `stopwords` take priority over them.
+- A vision model's projector is downloaded as a second file, `<name>-mmproj.gguf`, and set as `mmproj`.
+- The chat template stays the one inside the GGUF file. LocalAI does not import the Ollama template, system prompt or license.
+- A model or tag that does not exist, or a manifest without model weights, fails the import with an error that names the model.
+
 ### Standard OCI Registry
 
 ```bash
@@ -252,6 +261,8 @@ To run models via URI, specify a URI to a model file or a configuration file whe
 {{% callout style="note" %}}
 When using `file://` URLs, the path must point to a file within your models directory (specified by `MODELS_PATH`). Files outside this directory are rejected for security reasons.
 {{% /callout %}}
+
+Every blob that LocalAI downloads from an OCI or Ollama registry is checked against its sha256 digest and size. A download that fails the check, or fails for any other reason, leaves no partial file behind.
 
 Configuration files can be used to customize the model defaults and settings. For advanced configurations, refer to the [Customize Models section]({{% relref "/start/customize-model" %}}).
 
@@ -348,12 +359,14 @@ Choose one of the following methods to run LocalAI:
 {{< tabs >}}
 {{% tab title="Docker" %}}
 
+Create the `models` and `data` folders as your own user before you start the container. When you own both folders, LocalAI runs as your user, and the files stay yours on the host. See [Container user and permissions]({{% relref "/start/install/containers#container-user-and-permissions" %}}).
+
 ```bash
-mkdir models
+mkdir -p models data
 
 cp your-model.gguf models/
 
-docker run -p 8080:8080 -v $PWD/models:/models -ti --rm localai/localai:latest --models-path /models --context-size 700 --threads 4
+docker run -p 8080:8080 -v "$PWD/models:/models" -v "$PWD/data:/data" -ti --rm localai/localai:latest --models-path /models --context-size 700 --threads 4
 
 curl http://localhost:8080/v1/completions -H "Content-Type: application/json" -d '{
      "model": "your-model.gguf",
@@ -371,13 +384,13 @@ For other Docker images, please refer to the table in [the container images sect
 ### Example:
 
 ```bash
-mkdir models
+mkdir -p models data
 
 wget https://huggingface.co/TheBloke/Luna-AI-Llama2-Uncensored-GGUF/resolve/main/luna-ai-llama2-uncensored.Q4_0.gguf -O models/luna-ai-llama2
 
 cp -rf prompt-templates/getting_started.tmpl models/luna-ai-llama2.tmpl
 
-docker run -p 8080:8080 -v $PWD/models:/models -ti --rm localai/localai:latest --models-path /models --context-size 700 --threads 4
+docker run -p 8080:8080 -v "$PWD/models:/models" -v "$PWD/data:/data" -ti --rm localai/localai:latest --models-path /models --context-size 700 --threads 4
 
 curl http://localhost:8080/v1/models
 
@@ -396,14 +409,19 @@ curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/jso
 {{% /tab %}}
 {{% tab title="Docker Compose" %}}
 
+Download the compose file and create the folders for the bind mounts:
+
 ```bash
-git clone https://github.com/go-skynet/LocalAI
+curl -fsSL https://localai.io/install/docker-compose.yaml -o docker-compose.yaml
+mkdir -p models backends data configuration
+```
 
-cd LocalAI
+In `docker-compose.yaml`, replace the four named volumes with the four bind-mount lines from the comments (`./models:/models` and the others). Then copy the model and start LocalAI:
 
+```bash
 cp your-model.gguf models/
 
-docker compose up -d --pull always
+docker compose up -d
 
 curl http://localhost:8080/v1/models
 
@@ -417,8 +435,10 @@ curl http://localhost:8080/v1/completions -H "Content-Type: application/json" -d
 {{% callout style="tip" %}}
 **Other Docker Images**:
 
-For other Docker images, please refer to the table in [Getting Started](https://localai.io/basics/getting_started/#container-images).
+For other Docker images, please refer to the table in [the container images section]({{% relref "/start/install/containers" %}}).
  {{% /callout %}}
+
+To keep the named volumes of the compose file instead, copy the model into the running container: `docker compose cp your-model.gguf localai:/models/`.
 
 Note: If you are on Windows, ensure the project is on the Linux filesystem to avoid slow model loading. For more information, see the [Microsoft Docs](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
 

@@ -72,13 +72,24 @@ type ModelConfig struct {
 	// than one per request body. Unexported, so it never enters the hash it
 	// describes and never reaches YAML or JSON.
 	persistedConfigRevision string `yaml:"-" json:"-"`
+	// batchFromHardware marks a Batch that ApplyHardwareDefaults wrote, so a
+	// later consumer can tell it from a `batch:` the user set.
+	batchFromHardware bool `yaml:"-" json:"-"`
+	// recurrentState is the per-sequence recurrent state of a hybrid or
+	// recurrent model from its GGUF header (0 otherwise), which
+	// ApplyHardwareDefaults counts per slot and per context checkpoint.
+	recurrentState uint64 `yaml:"-" json:"-"`
 	// mcpSessionKey keys the MCP session cache when it must differ from Name.
 	// A profile alias that brings its own MCP servers resolves to its target's
 	// config (so Name, and with it the backend process, stays the target's),
 	// but its sessions must not share a cache slot with the target's: the
 	// slot is invalidated on every config change, so two server sets under one
 	// key would tear each other's sessions down. Unexported: never persisted.
-	mcpSessionKey            string `yaml:"-" json:"-"`
+	mcpSessionKey string `yaml:"-" json:"-"`
+	// llguidanceGrammars maps a GBNF grammar that SchemaGrammar built to its
+	// llguidance form. It is replaced, never written in place, because the
+	// request pipeline works on shallow copies of one ModelConfig.
+	llguidanceGrammars       map[string]string `yaml:"-" json:"-"`
 	schema.PredictionOptions `yaml:"parameters,omitempty" json:"parameters,omitempty"`
 	Name                     string                `yaml:"name,omitempty" json:"name,omitempty"`
 	Artifacts                []modelartifacts.Spec `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
@@ -2134,6 +2145,10 @@ func (cfg *ModelConfig) SetDefaults(opts ...ConfigLoaderOption) {
 	cfg.syncKnownUsecasesFromString()
 }
 
+// backendNameRe matches a backend name with no special characters, except '-'
+// and '_'. Validate runs for every request, so it is compiled once.
+var backendNameRe = regexp.MustCompile(`^[a-zA-Z0-9-_]+$`)
+
 func (c *ModelConfig) Validate() (bool, error) {
 	for _, operation := range c.ThreeDOperations() {
 		for _, parameter := range operation.Parameters {
@@ -2236,9 +2251,7 @@ func (c *ModelConfig) Validate() (bool, error) {
 	}
 
 	if c.Backend != "" {
-		// a regex that checks that is a string name with no special characters, except '-' and '_'
-		re := regexp.MustCompile(`^[a-zA-Z0-9-_]+$`)
-		if !re.MatchString(c.Backend) {
+		if !backendNameRe.MatchString(c.Backend) {
 			return false, fmt.Errorf("invalid backend name: %s", c.Backend)
 		}
 	}
@@ -2991,4 +3004,10 @@ func (c *ModelConfig) warnRemovedAgentOptions() {
 		xlog.Warn("Deprecated agent options are ignored: the chats loop has no planning, plan re-evaluation, loop detection or reasoning switch",
 			"model", c.Name, "file", c.modelConfigFile, "options", strings.Join(removed, ", "))
 	}
+}
+
+// BatchIsManaged reports whether the physical batch is a LocalAI default
+// (unset, or written by the hardware heuristics) rather than a user value.
+func (c *ModelConfig) BatchIsManaged() bool {
+	return c.Batch == 0 || c.batchFromHardware
 }

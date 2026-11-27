@@ -3,6 +3,8 @@ package provider_test
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/mudler/cogito"
 	. "github.com/onsi/ginkgo/v2"
@@ -79,14 +81,37 @@ var _ = Describe("refused and failing model requests", func() {
 		Expect(f.RetryAfter).To(Equal(30))
 	})
 
-	It("still retries an overloaded model", func() {
+	It("marks a model whose backend is too old and names the backend", func() {
 		tr := provider.NewTransport()
 		tr.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Retry-After", "2")
+			w.Header().Set(model.LoadFailedHeader, "true")
+			w.Header().Set(model.LoadCauseHeader, model.LoadCauseBackendOutdated)
+			w.Header().Set(model.LoadBackendHeader, "metal-llama-cpp")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"model \"m\" load is in cooldown after a recent failure; retry after 30s"}}`))
 		}))
+		_, err := get(tr.Client(nil), context.Background(), "http://studio.invalid/v1/chat/completions")
+		Expect(err).To(HaveOccurred())
+		f := session.Classify(err)
+		Expect(f.Code).To(Equal(session.CodeBackendOutdated))
+		Expect(f.Backend).To(Equal("metal-llama-cpp"))
+		Expect(f.Model).To(Equal("m"))
+	})
+
+	It("still retries an overloaded model", func() {
+		var calls atomic.Int32
+		tr := provider.NewTransport()
+		tr.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) == 1 {
+				w.Header().Set("Retry-After", "2")
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+		}))
+		provider.SetSleep(tr, func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
 		resp, err := get(tr.Client(nil), context.Background(), "http://studio.invalid/v1/chat/completions")
 		Expect(err).ToNot(HaveOccurred(), "a plain 503 became an error")
 		_ = resp.Body.Close()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(calls.Load()).To(Equal(int32(2)))
 	})
 })

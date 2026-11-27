@@ -94,13 +94,16 @@ type ModelLoader struct {
 	externalBackends         map[string]string
 	lruEvictionMaxRetries    int           // Maximum number of retries when waiting for busy models
 	lruEvictionRetryInterval time.Duration // Interval between retries when waiting for busy models
-	onUnloadHooks            []ModelUnloadHook
-	loadObserver             func(BackendLoadEvent)
-	loadLifecycleObserver    func(BackendLoadEvent) (func(BackendLoadEvent), error)
-	remoteUnloader           RemoteModelUnloader
-	modelRouter              ModelRouter // distributed mode: route to remote node
-	backendLogs              *BackendLogStore
-	backendLoggingEnabled    atomic.Bool
+	// modelSwapDisabled stops the loader from unloading a model to make
+	// room for another. Stored negated so the zero value keeps swap on.
+	modelSwapDisabled     bool
+	onUnloadHooks         []ModelUnloadHook
+	loadObserver          func(BackendLoadEvent)
+	loadLifecycleObserver func(BackendLoadEvent) (func(BackendLoadEvent), error)
+	remoteUnloader        RemoteModelUnloader
+	modelRouter           ModelRouter // distributed mode: route to remote node
+	backendLogs           *BackendLogStore
+	backendLoggingEnabled atomic.Bool
 	// stoppingProcs marks backend processes that LocalAI is stopping on
 	// purpose (model unload / graceful shutdown), keyed by the
 	// *process.Process pointer. The exit-watcher goroutine in startProcess
@@ -121,6 +124,10 @@ type ModelLoader struct {
 	// blockedLoads are the models whose loads are refused while their files
 	// change (a model upgrade). Guarded by mu.
 	blockedLoads map[string]bool
+
+	// hiddenOutput hides the backend output of zero-retention requests
+	// (see HideBackendOutput).
+	hiddenOutput hiddenOutput
 }
 
 // loadFailureState tracks consecutive load failures for a single modelID and
@@ -131,6 +138,9 @@ type loadFailureState struct {
 	// backendMissing records that the last failure was a backend that is not
 	// installed, so a caller can tell the user to install it instead of waiting.
 	backendMissing bool
+	// outdatedBackend names the backend that refused the model because it is
+	// too old for it, so a caller can tell the user to update that backend.
+	outdatedBackend string
 }
 
 // LoadFailedHeader is set on an HTTP answer that refuses a request because the
@@ -149,6 +159,10 @@ const UpstreamStatusHeader = "X-Localai-Upstream-Status"
 const (
 	LoadCauseHeader         = "X-Localai-Model-Load-Cause"
 	LoadCauseBackendMissing = "backend-missing"
+	// LoadCauseBackendOutdated says the backend is too old for the model. The
+	// name of the backend is in LoadBackendHeader.
+	LoadCauseBackendOutdated = "backend-outdated"
+	LoadBackendHeader        = "X-Localai-Model-Load-Backend"
 )
 
 // ModelLoadCooldownError is returned when a model load is skipped because a
@@ -161,12 +175,38 @@ type ModelLoadCooldownError struct {
 	// BackendMissing is true when the failure that armed the cooldown was a
 	// backend that is not installed.
 	BackendMissing bool
+	// OutdatedBackend is the backend that was too old for the model, when
+	// that was the failure that armed the cooldown.
+	OutdatedBackend string
 }
 
 func (e *ModelLoadCooldownError) Error() string {
 	return fmt.Sprintf("model %q load is in cooldown after a recent failure; retry after %s",
 		e.ModelID, e.RetryAfter.Round(time.Second))
 }
+
+// ErrModelSwapDisabled is the sentinel of ModelSwapDisabledError, for
+// errors.Is checks.
+var ErrModelSwapDisabled = errors.New("model swap is disabled and no room is free")
+
+// ModelSwapDisabledError is returned when a load needs another model unloaded
+// (the active model limit is reached or a concurrency group is held) and
+// model swap is off. The HTTP layer maps it to 503 with a Retry-After header:
+// room may free up when a model goes idle and the watchdog unloads it.
+type ModelSwapDisabledError struct {
+	ModelID    string
+	RetryAfter time.Duration
+}
+
+func (e *ModelSwapDisabledError) Error() string {
+	return fmt.Sprintf("cannot load model %q: %s; retry after %s",
+		e.ModelID, ErrModelSwapDisabled, e.RetryAfter.Round(time.Second))
+}
+
+func (e *ModelSwapDisabledError) Is(target error) bool { return target == ErrModelSwapDisabled }
+
+// RetryLater marks the refusal as a wait, not a fault of the request.
+func (e *ModelSwapDisabledError) RetryLater() bool { return true }
 
 // ModelLoadsBlockedError is returned when a load is refused because the
 // model's files are being replaced (a model upgrade). The HTTP layer maps it
@@ -250,15 +290,15 @@ func (ml *ModelLoader) SetLoadFailureCooldown(base, max time.Duration) {
 
 // cooldownRemaining returns how long the modelID's load cooldown still has to
 // run, or 0 if there is none. Callers must hold ml.mu.
-func (ml *ModelLoader) cooldownRemaining(modelID string) (time.Duration, bool) {
+func (ml *ModelLoader) cooldownRemaining(modelID string) (time.Duration, bool, string) {
 	st := ml.loadFailures[modelID]
 	if st == nil {
-		return 0, false
+		return 0, false, ""
 	}
 	if remaining := time.Until(st.cooldownUntil); remaining > 0 {
-		return remaining, st.backendMissing
+		return remaining, st.backendMissing, st.outdatedBackend
 	}
-	return 0, false
+	return 0, false, ""
 }
 
 // recordLoadFailure grows the modelID's consecutive-failure count and arms the
@@ -276,6 +316,7 @@ func (ml *ModelLoader) recordLoadFailure(modelID string, cause error) {
 	}
 	st.consecutive++
 	st.backendMissing = errors.Is(cause, ErrBackendNotFound)
+	st.outdatedBackend = OutdatedBackendOf(cause)
 	// base * 2^(consecutive-1), clamped. Cap the shift to avoid overflowing
 	// the Duration; anything past the cap collapses to loadFailureMaxCooldown.
 	shift := st.consecutive - 1
@@ -390,6 +431,22 @@ func (ml *ModelLoader) SetBackendLoggingEnabled(enabled bool) {
 
 func (ml *ModelLoader) BackendLoggingEnabled() bool {
 	return ml.backendLoggingEnabled.Load()
+}
+
+// SetModelSwap turns model swap on or off. With swap off, a load that needs
+// room waits for the LRU retry window and then fails with a
+// ModelSwapDisabledError; no other model is unloaded for it.
+func (ml *ModelLoader) SetModelSwap(enabled bool) {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	ml.modelSwapDisabled = !enabled
+}
+
+// ModelSwapEnabled reports whether a load may unload other models.
+func (ml *ModelLoader) ModelSwapEnabled() bool {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	return !ml.modelSwapDisabled
 }
 
 // SetLRUEvictionRetrySettings updates the LRU eviction retry settings
@@ -632,10 +689,10 @@ func (ml *ModelLoader) loadModel(modelID, modelName, modelFileName string, loade
 	// on every request. The coalesced follower-retry below passes
 	// checkCooldown=false so an in-flight burst still gets its one retry.
 	if checkCooldown {
-		if retryAfter, backendMissing := ml.cooldownRemaining(modelID); retryAfter > 0 {
+		if retryAfter, backendMissing, outdated := ml.cooldownRemaining(modelID); retryAfter > 0 {
 			ml.mu.Unlock()
 			xlog.Debug("Model load in cooldown after a recent failure", "modelID", modelID, "retryAfter", retryAfter)
-			return nil, &ModelLoadCooldownError{ModelID: modelID, RetryAfter: retryAfter, BackendMissing: backendMissing}
+			return nil, &ModelLoadCooldownError{ModelID: modelID, RetryAfter: retryAfter, BackendMissing: backendMissing, OutdatedBackend: outdated}
 		}
 	}
 
@@ -732,6 +789,15 @@ func (ml *ModelLoader) ShutdownModelAtAddress(modelName, address string, force b
 	if !ok || m.address != address {
 		return nil
 	}
+	if ml.isRemoteStub(m) {
+		// In distributed mode this frontend's watchdog owns only the
+		// backends it started. A remote replica is unloaded by the cluster
+		// (router eviction, reconciler sweeps); unloading it from here
+		// would stop the model on every node that holds it.
+		xlog.Debug("Watchdog eviction of a remote replica: dropping the local stub only", "model", modelName, "address", address)
+		ml.evictRemoteStub(modelName)
+		return nil
+	}
 	err = ml.deleteProcess(ctx, modelName, force)
 	if errors.Is(err, ErrModelBusy) && !force && forceBackendShutdown {
 		forceCtx, forceCancel := context.WithTimeout(context.Background(), forcedShutdownTimeout)
@@ -767,6 +833,30 @@ func (ml *ModelLoader) shutdownModel(ctx context.Context, modelName string, forc
 	}
 	defer release()
 	return ml.deleteProcess(ctx, modelName, force)
+}
+
+// isRemoteStub reports whether m is the local stub of a replica that runs on
+// a worker node: distributed mode, and no process of this frontend.
+func (ml *ModelLoader) isRemoteStub(m *Model) bool {
+	return ml.isDistributed() && m != nil && m.Process() == nil
+}
+
+// isDistributed reports whether loads are routed to worker nodes.
+func (ml *ModelLoader) isDistributed() bool {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	return ml.modelRouter != nil
+}
+
+// trackAddressBackend registers a backend reached by address with the
+// watchdog, so LRU and group eviction see it loaded. In distributed mode an
+// address-only backend is a remote replica, which the frontend's watchdog
+// leaves to the cluster.
+func (ml *ModelLoader) trackAddressBackend(modelID, address string) {
+	if ml.wd == nil || ml.isDistributed() {
+		return
+	}
+	ml.wd.AddAddressModelMap(address, modelID)
 }
 
 // evictRemoteStub drops the local stub of a remote model without telling any
@@ -816,6 +906,7 @@ func (ml *ModelLoader) checkIsLoaded(s string) *Model {
 	ml.mu.Lock()
 	store := ml.store
 	wd := ml.wd
+	remoteUnloader := ml.remoteUnloader
 	ml.mu.Unlock()
 
 	m, ok := store.Get(s)
@@ -862,6 +953,13 @@ func (ml *ModelLoader) checkIsLoaded(s string) *Model {
 			}
 			if isConnectionError(err) {
 				xlog.Warn("Remote model unreachable (connection error), removing from cache", "model", s, "error", err)
+				if remoteUnloader != nil {
+					// The stub points at one replica. deleteProcess would
+					// stop the model on every node and take the healthy
+					// replicas down with this one.
+					ml.evictRemoteStub(s)
+					return nil
+				}
 				if delErr := ml.deleteProcess(cTimeout, s, false); delErr != nil {
 					xlog.Error("error cleaning up remote model", "error", delErr, "model", s)
 				}

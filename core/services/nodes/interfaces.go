@@ -71,8 +71,13 @@ type ModelRouter interface {
 // de-duplicate concurrent loaders across replicas without holding the per-model
 // advisory lock for the whole load. See ModelLoadJob.
 type LoadJobStore interface {
-	ClaimLoadJob(ctx context.Context, trackingKey, owner string) (*ModelLoadJob, bool, error)
-	GetLoadJob(ctx context.Context, trackingKey string) (*ModelLoadJob, error)
+	// ClaimLoadJobOn claims the load of trackingKey on nodeID. Each node has
+	// its own job, so a slow load on one node does not hold the model.
+	ClaimLoadJobOn(ctx context.Context, trackingKey, nodeID, owner string) (*ModelLoadJob, bool, error)
+	// ListLoadJobs returns every job of trackingKey, one per node.
+	ListLoadJobs(ctx context.Context, trackingKey string) ([]ModelLoadJob, error)
+	// GetLoadJobByRef returns the row of one attempt, or nil when it is gone.
+	GetLoadJobByRef(ctx context.Context, ref LoadJobRef) (*ModelLoadJob, error)
 	UpdateLoadJob(ctx context.Context, ref LoadJobRef, u LoadJobUpdate) error
 	FailLoadJob(ctx context.Context, ref LoadJobRef, msg string, workMayRun bool) error
 	DeleteLoadJob(ctx context.Context, ref LoadJobRef) error
@@ -178,9 +183,6 @@ type NodeControl interface {
 	InstallTimeout() time.Duration
 	// DeleteModelFiles asks every node that holds the model to delete its files.
 	DeleteModelFiles(modelName string) error
-	// InstallBackendForce is the rolling-update fallback for UpgradeBackend on
-	// a worker that does not serve backend upgrades: an install with Force set.
-	InstallBackendForce(nodeID, backendType, galleriesJSON, uri, name, alias string, replicaIndex int, opID string, onProgress func(workerctl.BackendInstallProgressEvent)) (*workerctl.BackendInstallReply, error)
 }
 
 // ConcurrencyConflictResolver returns the names of configured models that

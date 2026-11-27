@@ -6,6 +6,8 @@ import RequireAdmin from './components/RequireAdmin'
 import RequireAuth from './components/RequireAuth'
 import RequireAuthEnabled from './components/RequireAuthEnabled'
 import RequireFeature from './components/RequireFeature'
+import RouteError from './components/RouteError'
+import { recoverFromChunkError } from './utils/chunkReload'
 
 // Pages are code-split: each becomes its own chunk loaded on demand, so a route
 // no longer drags every other page (and its heavy deps — CodeMirror, the MCP
@@ -21,36 +23,8 @@ import RequireFeature from './components/RequireFeature'
 // still code-split, they just won't be preloaded from the nav.
 const preloaders = {}
 
-// A deploy swaps the whole content-hashed asset set at once, so a tab holding
-// an older index.html (or one whose request lands on a replica that hasn't
-// been swapped yet, the normal state during a rolling update) asks for a page
-// chunk the server no longer has. The import rejects and React Router's default
-// error boundary replaces the app with "Unexpected Application Error!" until
-// someone thinks to reload. Reloading is what fixes it, so do it automatically:
-// index.html is served no-cache, so the reload lands on a self-consistent set.
-//
-// The timestamp guard bounds that to one reload per RELOAD_WINDOW_MS. Without
-// it, a chunk that is genuinely gone rather than merely stale would reload the
-// app forever, which is worse than the error screen: it never settles and never
-// says why. The failure isn't narrowed to fetch errors: the message differs per
-// browser and a missed match costs the recovery, while a module that throws
-// while evaluating costs one wasted reload before the error surfaces anyway.
-const RELOAD_KEY = 'localai.chunkReloadedAt'
-const RELOAD_WINDOW_MS = 10_000
-let reloading = false
-
-function claimReload() {
-  try {
-    const last = Number(window.sessionStorage.getItem(RELOAD_KEY)) || 0
-    if (Date.now() - last < RELOAD_WINDOW_MS) return false
-    window.sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
-    return true
-  } catch {
-    // No usable sessionStorage means no way to bound the reloads.
-    return false
-  }
-}
-
+// A failed page import reloads the app once (utils/chunkReload.js): a deploy
+// has replaced the chunk this tab still names.
 function page(key, loader) {
   // The module once a load has finished. A page that was preloaded then
   // renders at once: React.lazy takes a thenable that answers synchronously
@@ -64,17 +38,7 @@ function page(key, loader) {
   // preloadRoute keeps the raw loader: a hover that fails must stay silent
   // rather than reload the page out from under the pointer. The click that
   // follows goes through this wrapper and recovers there.
-  return lazy(() => (loaded ? { then: (resolve) => resolve(loaded) } : load().catch(err => {
-    // A reload is already committing: a second chunk failing in the same
-    // document must wait for it, not throw and flash the error boundary.
-    if (reloading) return new Promise(() => {})
-    if (!claimReload()) throw err
-    reloading = true
-    window.location.reload()
-    // Stay pending. Resolving or rejecting here would flash the error boundary
-    // in the frames before the reload commits.
-    return new Promise(() => {})
-  })))
+  return lazy(() => (loaded ? { then: (resolve) => resolve(loaded) } : load().catch(recoverFromChunkError)))
 }
 
 export function preloadRoute(path) {
@@ -110,7 +74,7 @@ const Models = page('models', () => import('./pages/Models'))
 const ManageRedirect = page('manage', () => import('./pages/ManageRedirect'))
 // Referenced only from JSX below — same blind spot as Activity further down.
 // eslint-disable-next-line no-unused-vars
-const OperateOverview = page('operate', () => import('./pages/OperateOverview'))
+const AdminOverview = page('operate', () => import('./pages/AdminOverview'))
 const Backends = page('backends', () => import('./pages/Backends'))
 const Updates = page('updates', () => import('./pages/Updates'))
 const UpdateBackend = page('update-backend', () => import('./pages/UpdateBackend'))
@@ -134,7 +98,11 @@ const ImportModel = page(null, () => import('./pages/ImportModel'))
 const BackendLogs = page(null, () => import('./pages/BackendLogs'))
 const Login = page(null, () => import('./pages/Login'))
 const Nodes = page('nodes', () => import('./pages/Nodes'))
-const Scheduling = page('scheduling', () => import('./pages/Scheduling'))
+// Placement holds the rules and the failover chains as two views of one page.
+// eslint-disable-next-line no-unused-vars
+const Placement = page('scheduling', () => import('./pages/Placement'))
+// eslint-disable-next-line no-unused-vars
+const FailoverEntry = page('failover', () => import('./pages/Placement').then(m => ({ default: m.FailoverEntry })))
 const NodeBackendLogs = page(null, () => import('./pages/NodeBackendLogs'))
 const NodeDetail = page(null, () => import('./pages/NodeDetail'))
 // eslint-disable-next-line no-unused-vars
@@ -159,8 +127,8 @@ const Prometheus = page(null, () => import('./pages/Prometheus'))
 // eslint-disable-next-line no-unused-vars
 const TracePage = page(null, () => import('./pages/TracePage'))
 const Users = page('users', () => import('./pages/Users'))
+const ApiKeys = page('api-keys', () => import('./pages/ApiKeys'))
 const Middleware = page('middleware', () => import('./pages/Middleware'))
-const Failover = page('failover', () => import('./pages/Failover'))
 const Account = page('account', () => import('./pages/Account'))
 const Addons = page('addons', () => import('./pages/Addons'))
 // Only referenced from JSX below, which eslint cannot see.
@@ -173,11 +141,14 @@ const MCPConnectors = page('mcp-connectors', () => import('./pages/MCPConnectors
 import HubLayout from './components/hub/HubLayout'
 // Only referenced from JSX below, which eslint cannot see.
 // eslint-disable-next-line no-unused-vars
+import AdminLayout from './components/admin/AdminLayout'
+// Only referenced from JSX below, which eslint cannot see.
+// eslint-disable-next-line no-unused-vars
 import { AddonRegistryProvider } from './addons/registry'
 import { useAuth } from './context/AuthContext'
 import { NavigationProvider, useNavigation } from './context/NavigationContext'
 import { bareChatsRedirect, chatsRedirect } from './utils/legacyRoutes'
-import { legacyAddonsHub, operateHub } from './components/hub/hubConfig'
+import { legacyAddonsHub } from './components/hub/hubConfig'
 import { useHubAuth } from './components/hub/useHubAuth'
 
 // The old chat page became the chats and the old agent-jobs pages became the
@@ -216,6 +187,12 @@ function Admin({ children }) {
   return <RequireAdmin>{children}</RequireAdmin>
 }
 
+// The layout route of the pages: it only passes App's outlet context on, so the
+// pages read it as before, and it holds the error element of a page.
+function PageOutlet() {
+  return <Outlet context={useOutletContext()} />
+}
+
 function AddonsShell() {
   const { features, featuresLoaded } = useHubAuth()
   const outletContext = useOutletContext()
@@ -236,7 +213,8 @@ function DrawerGate({ children }) {
   const { builtin, status } = useNavigation()
   if (legacy) return <Feature feature="addons">{children}</Feature>
   if (loading || status === 'idle' || status === 'loading') return null
-  if (!isAdmin && !hasFeature('addons') && builtin.length === 0) return <Navigate to="/app" replace />
+  // The Plugins tab lives on this page: the plugins feature opens it too.
+  if (!isAdmin && !hasFeature('addons') && !hasFeature('plugins') && builtin.length === 0) return <Navigate to="/app" replace />
   return children
 }
 
@@ -324,12 +302,12 @@ const appChildren = [
   { path: 'agent-jobs/*', element: <ChatsRedirect /> },
   { path: 'agent-jobs', element: <ChatsRedirect /> },
 
-  // Operate hub (admin): one tab bar over the runtime, cluster, traffic and
-  // settings pages.
+  // Administration (admin): its own sidebar (components/admin) lists the
+  // runtime, cluster, traffic, access and settings pages.
   {
-    element: <HubLayout config={operateHub} />,
+    element: <AdminLayout />,
     children: [
-      { path: 'operate', element: <Admin><OperateOverview /></Admin> },
+      { path: 'operate', element: <Admin><AdminOverview /></Admin> },
       { path: 'backends', element: <Admin><Backends /></Admin> },
       { path: 'activity', element: <Admin><Activity /></Admin> },
       { path: 'updates', element: <Admin><Updates /></Admin> },
@@ -349,13 +327,15 @@ const appChildren = [
       { path: 'nodes', element: <Admin><Nodes /></Admin> },
       { path: 'nodes/add', element: <Admin><AddNode /></Admin> },
       { path: 'nodes/:id', element: <Admin><NodeDetail /></Admin> },
-      { path: 'scheduling', element: <Admin><Scheduling /></Admin> },
+      { path: 'scheduling', element: <Admin><Placement view="rules" /></Admin> },
+      { path: 'scheduling/failover', element: <Admin><Placement view="failover" /></Admin> },
       { path: 'node-backend-logs/:nodeId/:modelId', element: <Admin><NodeBackendLogs /></Admin> },
       { path: 'usage', element: <Usage /> },
       { path: 'users', element: <RequireAuthEnabled><Admin><Users /></Admin></RequireAuthEnabled> },
+      { path: 'api-keys', element: <RequireAuthEnabled><Admin><ApiKeys /></Admin></RequireAuthEnabled> },
       { path: 'chats-admin', element: <Admin><ServerSwitch name="chats" to="/app/operate"><ChatsAdmin /></ServerSwitch></Admin> },
       { path: 'middleware', element: <Admin><Middleware /></Admin> },
-      { path: 'failover', element: <Admin><Failover /></Admin> },
+      { path: 'failover', element: <Admin><FailoverEntry /></Admin> },
     ],
   },
 
@@ -379,15 +359,21 @@ export const router = createBrowserRouter([
   {
     path: '/login',
     element: <Login />,
+    errorElement: <RouteError />,
   },
   {
     path: '/invite/:code',
     element: <Login />,
+    errorElement: <RouteError />,
   },
   {
     path: '/app',
     element: <RequireAuth><AddonRegistryProvider><NavigationProvider><App /></NavigationProvider></AddonRegistryProvider></RequireAuth>,
-    children: appChildren,
+    errorElement: <RouteError />,
+    // A page that fails is drawn inside the layout, so the sidebar stays and
+    // the person can go elsewhere. A failure of the layout itself (the
+    // notification panel, the header) reaches the error element above.
+    children: [{ element: <PageOutlet />, errorElement: <RouteError inline />, children: appChildren }],
   },
   // Backward compatibility: redirect /browse/* to /app/*
   {
@@ -400,5 +386,5 @@ export const router = createBrowserRouter([
   },
   // An address outside the app that is not a page: the same 404 page, so the
   // visitor gets a way back instead of the router's default error.
-  { path: '*', element: <NotFound /> },
+  { path: '*', element: <NotFound />, errorElement: <RouteError /> },
 ], { basename: routerBasename })

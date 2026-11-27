@@ -116,6 +116,10 @@ func applyModelLoadCooldown(err error, code int, c echo.Context) int {
 	if coolErr.BackendMissing {
 		c.Response().Header().Set(model.LoadCauseHeader, model.LoadCauseBackendMissing)
 	}
+	if coolErr.OutdatedBackend != "" {
+		c.Response().Header().Set(model.LoadCauseHeader, model.LoadCauseBackendOutdated)
+		c.Response().Header().Set(model.LoadBackendHeader, coolErr.OutdatedBackend)
+	}
 	return http.StatusServiceUnavailable
 }
 
@@ -134,6 +138,18 @@ func applyModelLoadsBlocked(err error, code int, c echo.Context) int {
 	return http.StatusServiceUnavailable
 }
 
+// applyModelSwapDisabled maps a load refused because model swap is off and no
+// room is free to 503 with a Retry-After header (whole seconds, floor 1).
+func applyModelSwapDisabled(err error, code int, c echo.Context) int {
+	var swapErr *model.ModelSwapDisabledError
+	if !errors.As(err, &swapErr) {
+		return code
+	}
+	secs := max(int(math.Ceil(swapErr.RetryAfter.Seconds())), 1)
+	c.Response().Header().Set("Retry-After", strconv.Itoa(secs))
+	return http.StatusServiceUnavailable
+}
+
 func applyBackendAdmission(err error, code int, c echo.Context) int {
 	var capacityErr *corebackend.BackendAdmissionError
 	if !errors.As(err, &capacityErr) {
@@ -143,14 +159,23 @@ func applyBackendAdmission(err error, code int, c echo.Context) int {
 	return http.StatusTooManyRequests
 }
 
-// applyNoAvailableNodes maps scheduler "no available nodes" errors to 503.
-// When the cluster has no healthy node to serve a model — all are full, a
-// node selector excludes every candidate, or eviction could not free a slot —
-// the request is retryable, not a server bug. Without this the error fell
-// through to 500, which tells clients something is broken when they just
-// need to wait for a node.
-func applyNoAvailableNodes(err error, code int) int {
+// noAvailableNodesRetryAfter is the Retry-After of a request that found no
+// node for its model. Failover, a node that recovers, or the reconciler can
+// change that within seconds, so the client is told to come back soon.
+const noAvailableNodesRetryAfter = "10"
+
+// applyNoAvailableNodes maps scheduler "no available nodes" errors to 503 with
+// a Retry-After header. When the cluster has no healthy node to serve a model
+// (all are full, no node has enough free memory, a node selector excludes
+// every candidate, the model's scheduling rule cannot be read, or eviction
+// could not free a slot) the request is retryable, not a server bug. Without
+// this the error fell through to 500, which tells clients something is broken
+// when they just need to wait for a node.
+func applyNoAvailableNodes(err error, code int, c echo.Context) int {
 	if errors.Is(err, nodes.ErrNoAvailableNodes) {
+		if c.Response().Header().Get("Retry-After") == "" {
+			c.Response().Header().Set("Retry-After", noAvailableNodesRetryAfter)
+		}
 		return http.StatusServiceUnavailable
 	}
 	return code
@@ -281,8 +306,9 @@ func API(application *application.Application) (*echo.Echo, error) {
 			}
 			code = applyModelLoadCooldown(err, code, c)
 			code = applyModelLoadsBlocked(err, code, c)
+			code = applyModelSwapDisabled(err, code, c)
 			code = applyBackendAdmission(err, code, c)
-			code = applyNoAvailableNodes(err, code)
+			code = applyNoAvailableNodes(err, code, c)
 
 			// Handle 404 errors: serve React SPA for HTML requests, JSON otherwise
 			if code == http.StatusNotFound {
@@ -317,11 +343,12 @@ func API(application *application.Application) (*echo.Echo, error) {
 			}
 			code = applyModelLoadCooldown(err, code, c)
 			code = applyModelLoadsBlocked(err, code, c)
+			code = applyModelSwapDisabled(err, code, c)
 			code = applyBackendAdmission(err, code, c)
 			// Opaque errors deliberately withhold the body, so a still-loading
 			// model gets the status and Retry-After but no progress detail.
 			code = applyModelLoading(err, code, c)
-			code = applyNoAvailableNodes(err, code)
+			code = applyNoAvailableNodes(err, code, c)
 			c.NoContent(code)
 		}
 	}
@@ -462,6 +489,10 @@ func API(application *application.Application) (*echo.Echo, error) {
 	// the role of the exempt-path logic inside the middleware.
 	e.Use(authMiddleware)
 
+	// The incognito level of a web UI request: after auth, which it reads, and
+	// before every route middleware that keeps something (traces, usage).
+	e.Use(httpMiddleware.Incognito(application.ApplicationConfig(), application.AuthDB() != nil))
+
 	// Feature and model access control (after auth middleware, before routes)
 	if application.AuthDB() != nil {
 		e.Use(auth.RequireRouteFeature(application.AuthDB()))
@@ -517,6 +548,7 @@ func API(application *application.Application) (*echo.Echo, error) {
 	var opcache *galleryop.OpCache
 	if !application.ApplicationConfig().DisableWebUI {
 		opcache = galleryop.NewOpCache(application.GalleryService())
+		application.SetOperationCache(opcache)
 		// In distributed mode, wire the NATS client + gallery store so this
 		// replica's OpCache stays in sync with peers — without this the
 		// /api/operations endpoint returns whatever this single replica
@@ -571,6 +603,9 @@ func API(application *application.Application) (*echo.Echo, error) {
 	mcpMw := auth.RequireFeature(application.AuthDB(), auth.FeatureMCP)
 	routes.RegisterLocalAIRoutes(e, requestExtractor, application.ModelConfigLoader(), application.ModelLoader(), application.ApplicationConfig(), application.GalleryService(), opcache, application.TemplatesEvaluator(), application, adminMiddleware, mcpMw)
 	routes.RegisterCollectionsRoutes(e, application, collectionsMw)
+	// Plugins compatible with the Claude Code plugin format. The routes answer
+	// 503 with the reason when the service is off.
+	routes.RegisterPluginRoutes(e, application, opcache, adminMiddleware)
 	if addonsOn {
 		// Fine-tuning routes
 		fineTuningMw := auth.RequireFeature(application.AuthDB(), auth.FeatureFineTuning)
@@ -643,6 +678,9 @@ func API(application *application.Application) (*echo.Echo, error) {
 		if err := application.RegisterAddonClientList(); err != nil {
 			return nil, err
 		}
+		if err := application.RegisterAddonEvents(); err != nil {
+			return nil, err
+		}
 		if err := application.RegisterAddonClientFolders(application.StudioFiles()); err != nil {
 			return nil, err
 		}
@@ -667,6 +705,10 @@ func API(application *application.Application) (*echo.Echo, error) {
 		tunnels = d.Tunnels
 		registerOpts = append(registerOpts, localai.WithTunnelDisconnector(d))
 		registerOpts = append(registerOpts, localai.WithNATSHandover(d.NATS))
+		// A worker may register with a join token, and gets the data plane
+		// token in the answer, so it never needs the registration token.
+		registerOpts = append(registerOpts, localai.WithJoinTokens(d.JoinTokens, d.JoinLimiter))
+		registerOpts = append(registerOpts, localai.WithWorkerToken(distCfg.WorkerAuthToken()))
 		// A worker that joined with a worker invite registers over P2P with
 		// its peer ID, and opens its tunnel there.
 		registerOpts = append(registerOpts, localai.WithWorkerPeers(application))
@@ -695,10 +737,15 @@ func API(application *application.Application) (*echo.Echo, error) {
 	routes.RegisterClusterRoutes(e, registry, tunnels, instances, onPeer)
 	var clusterAdmin routes.ClusterAdmin
 	if d := application.Distributed(); d != nil {
-		clusterAdmin = routes.ClusterAdmin{Settings: d.Settings, NATS: d.NATS, State: d.NATS}
+		clusterAdmin = routes.ClusterAdmin{Settings: d.Settings, NATS: d.NATS, State: d.NATS, JoinTokens: d.JoinTokens}
 	}
 	routes.RegisterClusterAdminRoutes(e, adminMiddleware, clusterAdmin)
-	routes.RegisterNodeAdminRoutes(e, registry, remoteUnloader, application.GalleryService(), opcache, application.ApplicationConfig(), adminMiddleware, application.AuthDB(), application.ApplicationConfig().Auth.APIKeyHMACSecret, application.ApplicationConfig().Distributed.RegistrationToken, natsCfg, workerHTTPDial, registerOpts...)
+	if d := application.Distributed(); d != nil {
+		routes.RegisterJoinScriptRoutes(e, d.JoinTokens, d.JoinLimiter)
+	} else {
+		routes.RegisterJoinScriptRoutes(e, nil, nil)
+	}
+	routes.RegisterNodeAdminRoutes(e, registry, remoteUnloader, application.GalleryService(), opcache, application.ApplicationConfig(), adminMiddleware, application.AuthDB(), application.ApplicationConfig().Auth.APIKeyHMACSecret, application.ApplicationConfig().Distributed.WorkerAuthToken(), natsCfg, workerHTTPDial, application.UpgradeChecker(), registerOpts...)
 
 	routes.RegisterOpenAIRoutes(e, requestExtractor, application)
 	routes.RegisterAnthropicRoutes(e, requestExtractor, application)
@@ -725,13 +772,13 @@ func API(application *application.Application) (*echo.Echo, error) {
 				// be cached: a stale copy pins the browser to the previous
 				// deploy's assets.
 				c.Response().Header().Set("Cache-Control", "no-cache")
-				// Inject <base href> for reverse-proxy support; baseURL comes
-				// from attacker-controllable Host / X-Forwarded-Host headers.
-				baseURL := httpMiddleware.BaseURL(c)
-				if baseURL != "" {
-					baseTag := `<base href="` + httpMiddleware.SecureBaseHref(baseURL) + `" />`
-					indexHTML = []byte(strings.Replace(string(indexHTML), "<head>", "<head>\n  "+baseTag, 1))
-				}
+				// Inject a path-only <base href> for reverse-proxy support (see
+				// BaseHrefPath for why it carries no scheme or host). The path
+				// can come from X-Forwarded-Prefix, so escape it.
+				basePath := httpMiddleware.BaseHrefPath(c)
+				safeBase := httpMiddleware.SecureBaseHref(basePath)
+				baseTag := `<base href="` + safeBase + `" />`
+				indexHTML = []byte(strings.Replace(string(indexHTML), "<head>", "<head>\n  "+baseTag, 1))
 				// <base href> only changes how relative URLs resolve; path-absolute
 				// URLs (those starting with `/`) still resolve against the origin
 				// and would bypass the reverse-proxy prefix. Rewrite the internal
@@ -744,12 +791,11 @@ func API(application *application.Application) (*echo.Echo, error) {
 				// shapes (// prefix, backslashes, control chars), not attribute
 				// breakout characters like `"`. Escaping makes this resilient
 				// even if the validator ever loosens.
-				if prefix := httpMiddleware.BasePathPrefix(c); prefix != "/" {
-					safePrefix := httpMiddleware.SecureBaseHref(prefix)
+				if basePath != "/" {
 					html := string(indexHTML)
-					html = strings.ReplaceAll(html, `="/assets/`, `="`+safePrefix+`assets/`)
-					html = strings.ReplaceAll(html, `="/favicon.svg"`, `="`+safePrefix+`favicon.svg"`)
-					html = strings.ReplaceAll(html, `="/apple-touch-icon.png"`, `="`+safePrefix+`apple-touch-icon.png"`)
+					html = strings.ReplaceAll(html, `="/assets/`, `="`+safeBase+`assets/`)
+					html = strings.ReplaceAll(html, `="/favicon.svg"`, `="`+safeBase+`favicon.svg"`)
+					html = strings.ReplaceAll(html, `="/apple-touch-icon.png"`, `="`+safeBase+`apple-touch-icon.png"`)
 					indexHTML = []byte(html)
 				}
 				return c.HTMLBlob(http.StatusOK, indexHTML)
@@ -856,7 +902,7 @@ func API(application *application.Application) (*echo.Echo, error) {
 		xlog.Info("LocalAI API server shutting down")
 	})
 
-	routes.RegisterStudioRoutes(e, application.StudioService(), routes.NewStudioModelChecker(application), adminMiddleware, routes.NewStudioOAuth(application))
+	routes.RegisterStudioRoutes(e, application.StudioService(), routes.NewStudioModelChecker(application), adminMiddleware, routes.NewStudioOAuth(application), routes.NewStudioUserLookup(application), routes.NewStudioIncognito(application))
 	// The notification center works with the chats on or off.
 	routes.RegisterNotificationRoutes(e, application.Notifier(), application.NotifyPusher(), application.StudioService() != nil)
 

@@ -15,12 +15,6 @@ import (
 // confirmation surface sets it from the proposal the human is looking at.
 const ConfirmHeader = "X-LocalAI-Confirm"
 
-// toolContextHeaders mark a request made by a tool, an agent run or an MCP
-// session. A confirmation that carries any of them is refused, whatever else
-// it carries. They are a second line: the credential rules below already
-// exclude every caller that has no browser session.
-var toolContextHeaders = []string{"Mcp-Session-Id", "X-LocalAI-Tool-Call", "X-LocalAI-Agent", "X-LocalAI-Execution-Context", "X-Mcp-Session-Id"}
-
 // ConfirmRequest names what the human was shown.
 type ConfirmRequest struct {
 	// Digest is the digest of the proposal as it was displayed.
@@ -34,7 +28,9 @@ type ConfirmRequest struct {
 //
 //  1. The credential is a browser session cookie. A named API key, a bearer
 //     token or a legacy key is how unattended agents and MCP clients
-//     authenticate, so none of them can confirm, whatever their role.
+//     authenticate, so none of them can confirm, whatever their role. The one
+//     exception is the desktop launcher's tab, which holds the server's own
+//     key in the token cookie in local-owner mode (see launcherTab).
 //  2. The request is a same-origin fetch from a page of this host
 //     (Sec-Fetch-Site same-origin, destination empty, mode cors or
 //     same-origin), which a cross-site page or a navigation cannot produce.
@@ -53,33 +49,18 @@ func humanSurface(c echo.Context, s settings, a contract.Actor, id string) bool 
 			return false
 		}
 	}
-	if cookie, err := c.Cookie("token"); err == nil && cookie.Value != "" {
+	if cookie, err := c.Cookie("token"); err == nil && cookie.Value != "" && !launcherTab(c, s) {
 		return false
 	}
 	if auth.GetAPIKey(c) != nil {
 		return false
 	}
-	for _, name := range toolContextHeaders {
-		if h.Get(name) != "" {
-			return false
-		}
+	// The tool markers are a second line: the credential rules above
+	// already exclude every caller that has no browser session.
+	if auth.HasToolContext(h) {
+		return false
 	}
-	if site := h.Get("Sec-Fetch-Site"); site != "" {
-		if site != "same-origin" || h.Get("Sec-Fetch-Dest") != "empty" {
-			return false
-		}
-		if mode := h.Get("Sec-Fetch-Mode"); mode != "cors" && mode != "same-origin" {
-			return false
-		}
-	} else if !sameHostBrowserRequest(c.Request()) {
-		// Browsers omit Sec-Fetch-* over plain HTTP on an address that is not
-		// localhost. Without Sec-Fetch-Site the request must still name this
-		// host in Origin or, when Origin is absent, Referer. A stray
-		// destination or mode that is present must still be the expected one.
-		return false
-	} else if dest := h.Get("Sec-Fetch-Dest"); dest != "" && dest != "empty" {
-		return false
-	} else if mode := h.Get("Sec-Fetch-Mode"); mode != "" && mode != "cors" && mode != "same-origin" {
+	if !auth.SameOriginFetch(c.Request()) {
 		return false
 	}
 	if id == "" || h.Get(ConfirmHeader) != id {
@@ -89,6 +70,15 @@ func humanSurface(c echo.Context, s settings, a contract.Actor, id string) bool 
 		return a.CredentialID == auth.AddonLocalOwnerID
 	}
 	return strings.HasPrefix(a.CredentialID, "session:") && len(a.CredentialID) > len("session:")
+}
+
+// launcherTab reports whether the token cookie is the server's own key set by
+// the desktop launcher for its web UI tab. That is allowed only in local-owner
+// mode and only when the auth middleware matched the cookie against a
+// configured legacy key and no named key. A cookie that holds anything else is
+// not accepted. Every other rule of humanSurface still applies to the request.
+func launcherTab(c echo.Context, s settings) bool {
+	return s.mode == auth.AddonModeLocalOwner && auth.GetSource(c) == auth.UsageSourceLegacy
 }
 
 // Propose stores a data or schema mutation as a pending proposal.

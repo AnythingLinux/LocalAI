@@ -5,7 +5,7 @@ icon: download
 weight: 40
 aliases:
   - "/installation/"
-keywords: ["install", "desktop", "launcher", "appimage", "script", "docker", "macos", "linux", "kubernetes", "setup"]
+keywords: ["install", "desktop", "android", "launcher", "appimage", "script", "docker", "macos", "linux", "kubernetes", "setup"]
 ---
 
 Install the server with a script, a binary, a container or Helm. Windows has a PowerShell install script and a native binary. The desktop app, which installs and runs the server for you, is in the 5.0 release.
@@ -17,6 +17,7 @@ Install the server with a script, a binary, a container or Helm. Windows has a P
 | Windows on amd64 | PowerShell script or binary | [Windows]({{% relref "/start/install/windows" %}}) |
 | An Intel Mac, a server, or a GPU image | Container | [Containers]({{% relref "/start/install/containers" %}}) |
 | A cluster | Helm chart | [Kubernetes]({{% relref "/start/install/kubernetes" %}}) |
+| An Android phone, and a server to connect to | Android app | [Android app]({{% relref "/start/install/android" %}}) |
 | A change to the code | Source | [Build from source]({{% relref "/contributing/build-from-source" %}}) |
 
 ## Install script
@@ -43,19 +44,44 @@ You can set these environment variables before the command:
 
 The script supports Linux on amd64 and arm64, and macOS on arm64 (Apple Silicon). There is no binary for Intel Macs. Use a container there. On Windows, use the PowerShell script in [Windows]({{% relref "/start/install/windows" %}}).
 
+### Install a worker
+
+The script has a worker mode that installs the binary and then a service that runs `local-ai worker` and joins a cluster. You normally do not type this yourself: an admin mints a join token on the Workers page (**Add worker**), and the page gives you a command such as `curl -fsSL 'https://ai.example.com/join.sh?t=...' | sudo sh`, which runs this mode. See [Join tokens]({{% relref "/administration/distributed-mode" %}}#join-tokens).
+
+```bash
+LOCALAI_REGISTER_TO=https://ai.example.com LOCALAI_JOIN_TOKEN=ljt_... sudo -E sh install.sh --worker
+```
+
+Run it as root. It writes a systemd unit on Linux (a launchd daemon on macOS, not tested on every macOS version), keeps the settings in `/etc/localai/worker.env` (readable by root only), and starts the service. The join token is read from the environment, never from a command line, and the script never prints it. Running it again is safe: the worker keeps its own credential in its state directory and needs the token once.
+
+| Variable | Effect |
+|---|---|
+| `LOCALAI_REGISTER_TO` | The URL of the frontend. Required. |
+| `LOCALAI_JOIN_TOKEN` | The join token. Required the first time. |
+| `LOCALAI_WORKER_ROUTES` | `nats`, `websocket` or both. Optional. |
+| `LOCALAI_WORKER_NAME` | The node name. The default is the host name. |
+| `LOCALAI_WORKER_DIR` | The state directory (models, backends, credential). The default is `/var/lib/local-ai` on Linux. |
+
+To remove the worker: `sudo systemctl disable --now localai-worker`, then remove `/etc/localai/worker.env`, `/etc/systemd/system/localai-worker.service` and the state directory, and delete the worker on the Workers page.
+
 ## Container
 
 ```bash
-docker run -p 8080:8080 --name local-ai -ti localai/localai:latest
+curl -fsSL https://localai.io/install/docker-compose.yaml -o docker-compose.yaml
+docker compose up -d
 ```
 
-Podman works the same way for the CPU image. For GPU images and persistent storage, see [Containers]({{% relref "/start/install/containers" %}}).
+The compose file runs the CPU image and keeps models, backends, settings and data in named volumes. For GPU images, `docker run`, Podman and file permissions, see [Containers]({{% relref "/start/install/containers" %}}).
 
 ## Desktop app
 
 The desktop app installs, updates, starts and stops the LocalAI server on your computer and shows the web interface in a window. It can also connect to a LocalAI server that runs somewhere else.
 
 The 5.0 release has the DMG for a Mac with Apple Silicon and the AppImages for Linux (x86-64 and ARM64). Later releases also have a Windows installer for x86-64. Download them from the [latest release](https://github.com/mudler/LocalAI/releases/latest). See [Desktop app]({{% relref "/start/install/desktop" %}}) for the steps, the first start, the update channels and troubleshooting.
+
+## Android app
+
+The Android app shows the web interface of a LocalAI server on your phone. It runs nothing on the phone. It connects to a server by its address, or over P2P with an invite link. See [Android app]({{% relref "/start/install/android" %}}) for the install steps, the sign-in, P2P and updates.
 
 ## Development builds
 

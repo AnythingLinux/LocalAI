@@ -724,6 +724,12 @@ var _ = Describe("Chats route contract", func() {
 		s := newStudioServer()
 		gated := map[string]string{}
 		for _, entry := range auth.RouteFeatureRegistry {
+			// The plugin switches of a chat are registered with the plugin
+			// routes (routes/plugins.go), not with the chats routes this server
+			// builds; plugins_test.go checks their feature and login.
+			if entry.Method == http.MethodPut && entry.Pattern == "/api/chats/:id/plugins" {
+				continue
+			}
 			if chatsSurface(entry.Pattern) {
 				gated[entry.Method+" "+entry.Pattern] = entry.Feature
 			}
@@ -738,6 +744,13 @@ var _ = Describe("Chats route contract", func() {
 			// The administrator views have no feature: they need the admin role
 			// (studio_admin_test.go checks that). They are still documented and
 			// need a login.
+			// The hook of an event trigger is public: the secret of the trigger is
+			// its credential (studio_triggerhook_test.go checks it). It has no
+			// feature and no login, and it is documented.
+			if r.Method == http.MethodPost && r.Path == "/api/chats/triggers/:id/hook" {
+				Expect(documented).To(HaveKey("POST /api/chats/triggers/{id}/hook"), "the hook is missing from swagger.json; run make swagger")
+				continue
+			}
 			isAdmin := strings.HasPrefix(r.Path, "/api/chats/admin/")
 			if !isAdmin {
 				count++

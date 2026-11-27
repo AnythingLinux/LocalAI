@@ -43,6 +43,15 @@ export const API_CONFIG = {
     backendUpdatesCheck: '/api/backends/updates/check',
     upgradeBackend: (name) => `/api/backends/upgrade/${name}`,
 
+    // Update runs: the server plans, runs and reports a set of updates of
+    // every kind (backends, add-ons, models) as one run.
+    updateRunsPreview: '/api/updates/runs/preview',
+    updateRuns: '/api/updates/runs',
+    updateRun: (id) => `/api/updates/runs/${encodeURIComponent(id)}`,
+    updateRunCancel: (id) => `/api/updates/runs/${encodeURIComponent(id)}/cancel`,
+    updateRunItemCancel: (id, key) => `/api/updates/runs/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}/cancel`,
+    updateRunRetry: (id) => `/api/updates/runs/${encodeURIComponent(id)}/retry`,
+
     // Resources
     resources: '/api/resources',
 
@@ -69,6 +78,13 @@ export const API_CONFIG = {
     p2pInvite: (id) => `/api/p2p/invites/${encodeURIComponent(id)}`,
     p2pDevices: '/api/p2p/devices',
     p2pDevice: (id) => `/api/p2p/devices/${encodeURIComponent(id)}`,
+    // A user's own devices (feature p2p_pair) and the admin policy of them
+    p2pMe: '/api/p2p/me',
+    p2pMyInvites: '/api/p2p/me/invites',
+    p2pMyInvite: (id) => `/api/p2p/me/invites/${encodeURIComponent(id)}`,
+    p2pMyDevices: '/api/p2p/me/devices',
+    p2pMyDevice: (id) => `/api/p2p/me/devices/${encodeURIComponent(id)}`,
+    p2pUserPairing: '/api/p2p/user-pairing',
     p2pRelays: '/api/p2p/relays',
     p2pRelay: (id) => `/api/p2p/relays/${encodeURIComponent(id)}`,
     p2pRelayCheck: (id) => `/api/p2p/relays/${encodeURIComponent(id)}/check`,
@@ -168,6 +184,11 @@ export const API_CONFIG = {
     modelsImportUri: '/models/import-uri',
     modelsImport: '/models/import',
     vramEstimate: '/api/models/vram-estimate',
+    engines: '/api/engines',
+    engineSettingsSchema: (engine) => `/api/engines/${encodeURIComponent(engine)}/settings-schema`,
+    engineCommandPreview: (engine) => `/api/engines/${encodeURIComponent(engine)}/command-preview`,
+    engineParseCommand: (engine) => `/api/engines/${encodeURIComponent(engine)}/parse-command`,
+    enginePlacement: (engine) => `/api/engines/${encodeURIComponent(engine)}/placement`,
     modelsStorage: '/api/models/storage',
     modelsJobStatus: (uid) => `/models/jobs/${uid}`,
     modelEditGet: (name) => `/api/models/edit/${encodeURIComponent(name)}`,
@@ -206,8 +227,11 @@ export const API_CONFIG = {
     nodeLabelKey: (id, key) => `/api/nodes/${id}/labels/${key}`,
     nodeMaxReplicasPerModel: (id) => `/api/nodes/${id}/max-replicas-per-model`,
     nodeVramBudget: (id) => `/api/nodes/${id}/vram-budget`,
+    nodeLimits: (id) => `/api/nodes/${id}/limits`,
     nodeSplitServer: (id) => `/api/nodes/${id}/split-server`,
     clusterSettings: '/api/cluster/settings',
+    clusterJoinTokens: '/api/cluster/join-tokens',
+    clusterJoinToken: (id) => `/api/cluster/join-tokens/${encodeURIComponent(id)}`,
     nodesScheduling: '/api/nodes/scheduling',
     nodesModels: '/api/nodes/models',
     nodesSchedulingModel: (model) => `/api/nodes/scheduling/${encodeURIComponent(model)}`,

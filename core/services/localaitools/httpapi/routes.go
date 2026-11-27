@@ -30,11 +30,13 @@ const (
 	routeBackendsLibraryUpdates = "/backends/library/updates"
 	routeBackendsUpdates        = "/backends/updates"
 	routeBackendsUpdatesCheck   = "/backends/updates/check"
+	routeUpgradeRuns            = "/api/updates/runs"
 	routeModelsUpdates          = "/api/models/updates"
 	routeModelsUpdatesCheck     = "/api/models/updates/check"
 	routeNodes                  = "/api/nodes"
 	routeScheduling             = "/api/nodes/scheduling"
 	routeVRAMEstimate           = "/api/models/vram-estimate"
+	routeEngines                = "/api/engines"
 	routeBranding               = "/api/branding"
 	routeSettings               = "/api/settings"
 	routeUsage                  = "/api/usage"
@@ -52,8 +54,13 @@ const (
 	routeP2PDevices             = "/api/p2p/devices"
 	routeP2PInvites             = "/api/p2p/invites"
 	routeP2PRelays              = "/api/p2p/relays"
+	routeP2PUserPairing         = "/api/p2p/user-pairing"
 	routeFederation             = "/api/federation"
 	routeFederationGroups       = "/api/federation/groups"
+	routePluginMarketplaces     = "/api/plugins/marketplaces"
+	routePluginCatalog          = "/api/plugins/catalog"
+	routePluginInspect          = "/api/plugins/inspect"
+	routePluginInstalls         = "/api/plugins/installs"
 	routeP2PSplitWorkers        = "/api/p2p/split-workers"
 	routeSharedFolders          = "/api/chats/admin/shared-folders"
 	routeSharedFolderRestore    = "/api/chats/admin/shared-folders/restore"
@@ -105,8 +112,16 @@ func routeToggleModelPinned(name, action string) string {
 	return fmt.Sprintf("/models/toggle-pinned/%s/%s", url.PathEscape(name), url.PathEscape(action))
 }
 
+func routeNodeDrain(id, action string) string {
+	return "/api/nodes/" + url.PathEscape(id) + "/" + action
+}
+
 func routeNodeSplitServer(id string) string {
 	return "/api/nodes/" + url.PathEscape(id) + "/split-server"
+}
+
+func routeNodeLimits(id string) string {
+	return "/api/nodes/" + url.PathEscape(id) + "/limits"
 }
 
 func routeNodeVRAMBudget(id string) string {
@@ -115,4 +130,18 @@ func routeNodeVRAMBudget(id string) string {
 
 func routeModelScheduling(modelName string) string {
 	return "/api/nodes/scheduling/" + url.PathEscape(modelName)
+}
+
+// routeUpgradeRun is /api/updates/runs/{id}[/{rest}].
+func routeUpgradeRun(id string, rest ...string) string {
+	p := routeUpgradeRuns + "/" + url.PathEscape(id)
+	for _, r := range rest {
+		p += "/" + r
+	}
+	return p
+}
+
+// engineRoute is the path of an operation of one engine's settings.
+func engineRoute(engine, op string) string {
+	return routeEngines + "/" + url.PathEscape(engine) + "/" + op
 }

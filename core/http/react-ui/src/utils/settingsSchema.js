@@ -99,9 +99,14 @@ export const FIELDS = [
     min: 50, max: 100, fallback: 0.8, default: 0.95, ...WATCHDOG_LIVE, needs: 'memory_reclaimer_enabled' },
   { key: 'max_active_backends', group: 'memory', was: 'backends', kind: 'int', label: 'Models kept loaded',
     desc: 'Maximum models to keep loaded at once. 0 means no limit, 1 keeps a single model.',
+    extra: (settings) => (settings.memory_scope === 'cluster' ? 'In distributed mode this is the limit of each worker node.' : null),
     placeholder: '0', default: 0, min: 0, ...WATCHDOG_LIVE },
+  { key: 'model_swap', group: 'memory', was: 'backends', kind: 'bool', label: 'Swap models when memory is full',
+    desc: 'When a node has no room for a model, unload the least recently used idle model to make room. When off, the request waits, then gets a 503 with Retry-After.',
+    default: true, apply: 'live' },
   { key: 'vram_budget', group: 'memory', was: 'performance', kind: 'text', label: 'GPU memory budget',
     desc: 'Cap the VRAM used for model allocation on this node. A percentage (80%) or an amount (12GB). Empty uses all detected VRAM.',
+    extra: (settings) => (settings.memory_scope === 'cluster' ? 'In distributed mode the budget applies on each worker node that sets none of its own.' : null),
     placeholder: 'e.g. 80% or 12GB', default: '', apply: 'live' },
 
   // ---- Speed and defaults --------------------------------------------------
@@ -152,8 +157,14 @@ export const FIELDS = [
   { key: 'csrf', group: 'access', was: 'api', kind: 'bool', label: 'CSRF protection', inverted: true,
     desc: 'Block forged cross-site browser requests. Requests that carry an API key are exempt.', default: true },
   { key: 'api_keys', group: 'access', was: 'apikeys', kind: 'lines', label: 'Shared API keys', sensitive: true, apply: 'live',
-    desc: 'Keys that any client may use, one per line or separated by commas. Keys set in the environment stay and cannot be removed here. Per-user keys live under Users and keys.',
+    desc: 'Keys that any client may use, one per line or separated by commas. Keys set in the environment stay and cannot be removed here. Per-user keys live under Access, API keys.',
     placeholder: 'sk-key-1\nsk-key-2' },
+  { key: 'incognito', group: 'access', was: 'chats', kind: 'select', options: ['allow', 'forbid'], label: 'Incognito chats',
+    desc: 'Let people start incognito chats in the web UI. allow: the chat page shows the incognito switch. forbid: the switch is hidden and the server refuses incognito requests. API keys never get incognito.',
+    default: 'allow', fallback: 'allow', emptyIsDefault: true, apply: 'live' },
+  { key: 'incognito_max_level', group: 'access', was: 'chats', kind: 'select', options: ['memory-off', 'zero-retention'], label: 'Highest incognito level',
+    desc: 'memory-off: an incognito chat does not read or write memory, and logs and traces stay as normal. zero-retention: also nothing of the chat is kept on the server, only usage counters. Pick memory-off when you need audit logs.',
+    default: 'zero-retention', fallback: 'zero-retention', emptyIsDefault: true, apply: 'live' },
   { key: 'mcp_connectors_allow_private', group: 'access', was: 'chats', kind: 'bool', label: 'MCP connectors may reach private networks',
     desc: 'Let the MCP servers that users add as connectors in the chats use addresses on private networks: this machine, link-local, private ranges and cloud metadata. Off, a connector can only reach public hosts, and every connection and redirect is checked at connect time. Turn it on only if your users are trusted: a connector can then probe your internal network through this server.',
     default: false, fallback: false, apply: 'live' },
@@ -222,13 +233,21 @@ export const FIELDS = [
     desc: 'Offer the chats of administrators the LocalAI admin tools, which manage this server: models, backends, settings and the state. Each chat, or saved agent, must switch the group on; a sub-agent and a run that starts by itself never has it.',
     default: true, fallback: true, apply: 'live', custom: 'tools' },
   { key: 'chats_tool_search', group: 'tools', was: 'chats', kind: 'select', options: ['auto', 'on', 'off'], label: 'Load LocalAI tools on demand',
-    desc: 'The LocalAI client and admin tool groups are large, and their schemas are sent to the model on every turn. auto: the chat sends three small tools (tool_search, tool_describe and tool_call) in their place when the schemas would take a tenth or more of the model\'s context window. on: always, and the tools of the user\'s MCP connectors load on demand too. off: never, the tools are always sent in full. The model finds and runs the tools with the same permissions as before.',
+    desc: 'The LocalAI client and admin tool groups, and the tools that an add-on marks as deferred, are large, and their schemas are sent to the model on every turn. auto: the chat sends three small tools (tool_search, tool_describe and tool_call) in their place when the schemas of a source would take a tenth or more of the model\'s context window; each source is decided on its own. on: always, and the tools of the user\'s MCP connectors load on demand too. off: never, the tools are always sent in full. The model finds and runs the tools with the same permissions as before.',
     default: 'auto', fallback: 'auto', emptyIsDefault: true, apply: 'live' },
   // The Tools tab draws this switch on the list_agents row.
   { key: 'chats_saved_agents', group: 'tools', was: 'chats', kind: 'bool', label: 'Saved agents in chats',
     desc: 'Let a chat list the user\'s saved agents and start one as a sub-agent. Each chat must still switch it on in its Tools menu, and the user needs the agents feature.',
     default: true, fallback: true, apply: 'live', custom: 'tools' },
   // The work folder of each chat (read at each turn, so live).
+  // Plugins in the Claude Code plugin format: read by the Plugins service at
+  // each request. The bounds are MinPluginMaxBytes and MaxPluginMaxBytes.
+  { key: 'plugins_user_installs', group: 'tools', was: 'chats', kind: 'bool', label: 'Users install plugins for themselves',
+    desc: 'Let users who have the plugins feature install plugins that run no code for themselves, from the Plugins tab of the Add-ons page. Off, only administrators install plugins. A plugin that runs code is always installed by an administrator, for everyone.',
+    default: true, fallback: true, apply: 'live' },
+  { key: 'plugins_max_bytes', group: 'tools', was: 'chats', kind: 'int', label: 'Largest plugin (bytes)',
+    desc: 'The most bytes the files of one plugin may take, from 1048576 to 209715200. A plugin over it is refused when it is reviewed or installed.',
+    default: 20971520, fallback: 20971520, emptyIsDefault: true, min: 1048576, max: 209715200, unit: 'bytes', apply: 'live' },
   { key: 'chats_work_folder', group: 'tools', was: 'chats', kind: 'bool', label: 'Work folder for helper files',
     desc: 'Tell the chats to put the scripts, logs and drafts they make in a work folder of each chat (Chats/<chat>/work in the user\'s files), so they do not mix with the user\'s own files. The Files pane of a chat lists them apart in either case.',
     default: true, fallback: true, apply: 'live' },
@@ -286,6 +305,11 @@ export const FIELDS = [
   { key: 'chats_max_iterations', group: 'tools', was: 'chats', kind: 'int', label: 'Steps per chat turn',
     desc: 'How many rounds of tool calls the model may make in one turn before it must answer (1 to 500). A turn that reaches the limit shows as paused, with a Continue button. A model whose configuration sets agent.max_iterations uses its own limit.',
     placeholder: '40', default: 40, min: 1, max: 500, apply: 'live' },
+  // The most add-on tools one chat is offered (core/config/runtime_settings_registry.go;
+  // read at each discovery, so live). Each add-on is limited to 32 tools apart from this.
+  { key: 'chats_addon_tool_limit', group: 'tools', was: 'chats', kind: 'int', label: 'Add-on tools per chat',
+    desc: 'The most add-on tools one chat is offered, from 16 to 256. Tools that replace a built-in one, such as the shell, come first. Every tool is described to the model on every turn, so a higher limit costs model context and can make the model choose worse; raise it only if chats show that add-on tools are left out. An add-on can offer at most 32 tools whatever this says.',
+    placeholder: '64', default: 64, min: 16, max: 256, apply: 'live' },
   // The limits of a chat's goal (core/config/runtime_settings_registry.go;
   // read when a turn ends, so live).
   { key: 'chats_goal_max_turns', group: 'tools', was: 'chats', kind: 'int', label: 'Automatic turns per goal',

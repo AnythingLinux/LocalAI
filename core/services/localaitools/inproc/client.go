@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	p2papi "github.com/mudler/LocalAI/core/http/endpoints/p2p"
+	"github.com/mudler/LocalAI/pkg/enginesettings"
+	"github.com/mudler/LocalAI/pkg/enginesettings/builtin"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mudler/LocalAI/core/backend"
@@ -33,6 +36,7 @@ import (
 	"github.com/mudler/LocalAI/core/services/modelupdates"
 	"github.com/mudler/LocalAI/core/services/nodes"
 	"github.com/mudler/LocalAI/core/services/nodes/prefixcache"
+	"github.com/mudler/LocalAI/core/services/plugins"
 	"github.com/mudler/LocalAI/core/services/remotes"
 	"github.com/mudler/LocalAI/core/services/routing/billing"
 	"github.com/mudler/LocalAI/core/services/routing/corpus"
@@ -42,12 +46,14 @@ import (
 	"github.com/mudler/LocalAI/core/services/studio/egress/audit"
 	"github.com/mudler/LocalAI/core/services/studio/provider"
 	"github.com/mudler/LocalAI/core/services/studio/sharedfolders"
+	"github.com/mudler/LocalAI/core/services/upgraderun"
 	"github.com/mudler/LocalAI/internal"
 	"github.com/mudler/LocalAI/pkg/model"
 	"github.com/mudler/LocalAI/pkg/modelsearch"
 	"github.com/mudler/LocalAI/pkg/system"
 	"github.com/mudler/LocalAI/pkg/utils"
 	"github.com/mudler/LocalAI/pkg/vram"
+	"github.com/mudler/xlog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,6 +84,18 @@ type Client struct {
 	// They are read at each call: both start after the client is built.
 	ModelUpdatesService func() *modelupdates.Service
 	ModelUpgrader       func() *modelupdates.Upgrader
+	// UpgradeRunService returns the service of the upgrade runs, or nil when the
+	// server keeps none. Read at each call: it starts after the client.
+	UpgradeRunService func() *upgraderun.Service
+	// BackendUpgradeGuard returns the early refusal of a backend upgrade that
+	// the REST routes use (not installed, no update), or nil for none. Read at
+	// each call: the update checker starts after the client.
+	BackendUpgradeGuard func() *backendupdates.UpgradeGuard
+	// MemorySettings stores and applies memory settings like POST
+	// /api/settings does: to the cluster store in distributed mode, to
+	// runtime_settings.json otherwise. nil makes set_model_memory_policy
+	// report it unavailable.
+	MemorySettings func(ctx context.Context, patch config.RuntimeSettings, by string) error
 
 	// FallbackUser is the identity of a call whose context carries no user
 	// (see localaitools.WithUser), and only when SingleUser is set. With
@@ -168,6 +186,14 @@ type Client struct {
 	// Files reads the input files of the client tools and stores their
 	// results. Nil: the home folder of the acting user in the chats' workspace.
 	Files localaitools.FileStore
+
+	// Plugins returns the service of the plugins in the Claude Code plugin
+	// format, or nil when it is off. Read at each call: it starts after the
+	// assistant.
+	Plugins func() *plugins.Service
+	// PluginJobs shows a queued plugin install in /api/operations. Nil
+	// leaves it out of that list; get_job_status still reads it.
+	PluginJobs func(pluginID, jobID string)
 
 	// ModelSearch is the search host: the shared Searcher with the add-on
 	// sources and the enabled set of each person. It is read at each call,
@@ -699,6 +725,10 @@ func (c *Client) InstallLibraryBackend(ctx context.Context, req localaitools.Ins
 	if c.AppConfig.DisableBackendInstall {
 		return nil, fmt.Errorf("%w: %s", gallery.ErrBackendInstallDisabled, req.Name)
 	}
+	// No install beside an upgrade run, as POST /backends/library/install.
+	if err := c.refuseIfRunActive(); err != nil {
+		return nil, err
+	}
 	if err := c.BackendLibrary.Install(ctx, req.SourceID, req.Name, req.Version); err != nil {
 		return nil, err
 	}
@@ -711,6 +741,13 @@ func (c *Client) UpgradeBackend(ctx context.Context, name string) (string, error
 	}
 	if c.AppConfig.DisableBackendInstall {
 		return "", fmt.Errorf("%w: %s", gallery.ErrBackendInstallDisabled, name)
+	}
+	// The same early refusal as the REST routes, before a run is admitted.
+	if refusal := c.backendGuard().Check(ctx, name, "", ""); refusal != nil {
+		return "", refusal
+	}
+	if jobID, handled, err := c.upgradeOneViaRun(ctx, upgraderun.KindGallery, name); handled {
+		return jobID, err
 	}
 	id, err := uuid.NewUUID()
 	if err != nil {
@@ -780,11 +817,31 @@ func (c *Client) queueModelUpgrade(name string, opts galleryop.ModelUpgradeOptio
 	return c.Gallery.EnqueueModelUpgrade(name, opts)
 }
 
-func (c *Client) UpgradeModel(_ context.Context, name string, configOnly bool, choices map[string]string) (string, error) {
+func (c *Client) UpgradeModel(ctx context.Context, name string, configOnly bool, choices map[string]string) (string, error) {
+	// An upgrade with options stays direct: a run makes no such choice. The
+	// checks of the route run first, so a refusal reads as before.
+	if name != "" && !configOnly && len(choices) == 0 && c.upgradeRuns() != nil {
+		up := c.modelUpgrader()
+		if up == nil || c.Gallery == nil {
+			return "", errModelUpgradesOff
+		}
+		if err := modelupdates.CheckRequest(up, c.modelUpdates(), name, false, nil); err != nil {
+			return "", err
+		}
+		if jobID, handled, err := c.upgradeOneViaRun(ctx, upgraderun.KindModel, name); handled {
+			return jobID, err
+		}
+	}
+	if err := c.refuseIfRunActive(); err != nil {
+		return "", err
+	}
 	return c.queueModelUpgrade(name, galleryop.ModelUpgradeOptions{ConfigOnly: configOnly, Choices: choices})
 }
 
 func (c *Client) RetryModelUpgrade(_ context.Context, name string) (string, error) {
+	if err := c.refuseIfRunActive(); err != nil {
+		return "", err
+	}
 	return c.queueModelUpgrade(name, galleryop.ModelUpgradeOptions{Retry: true})
 }
 
@@ -860,11 +917,40 @@ func (c *Client) SystemInfo(_ context.Context) (*localaitools.SystemInfo, error)
 	return info, nil
 }
 
-func (c *Client) ListNodes(_ context.Context) ([]localaitools.Node, error) {
-	// Node-registry wiring is the responsibility of the Application layer; an
-	// empty list is the right answer in single-process mode and a sensible
-	// stub until the Application plumbs the registry into this client.
-	return []localaitools.Node{}, nil
+// ListNodes lists the nodes of the registry in the shape the HTTP client
+// gives for GET /api/nodes, so that the assistant reads the same node IDs,
+// status and drain (deadline, leaving replicas) in both modes. The live
+// state of each route is filled by the HTTP endpoint only. Without a
+// registry (single-process mode) the list is empty.
+func (c *Client) ListNodes(ctx context.Context) ([]localaitools.Node, error) {
+	if c.NodeRegistry == nil {
+		return []localaitools.Node{}, nil
+	}
+	list, err := c.NodeRegistry.ListWithExtras(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localaitools.Node, 0, len(list))
+	for _, n := range list {
+		node := localaitools.Node{
+			ID:              n.ID,
+			Address:         n.Address,
+			HTTPAddress:     n.HTTPAddress,
+			Healthy:         n.Status == nodes.StatusHealthy,
+			Route:           localaitools.NodeRoute(strings.Split(n.Attached, ","), n.PeerID),
+			PeerID:          n.PeerID,
+			SplitServer:     n.SplitServer,
+			Status:          n.Status,
+			LeavingReplicas: n.LeavingReplicas,
+		}
+		if n.DrainDeadline != nil {
+			// encoding/json writes a time in this layout, so the HTTP client
+			// reads the same string.
+			node.DrainDeadline = n.DrainDeadline.Format(time.RFC3339Nano)
+		}
+		out = append(out, node)
+	}
+	return out, nil
 }
 
 func (c *Client) ListScheduling(ctx context.Context) ([]localaitools.ModelSchedulingConfig, error) {
@@ -1003,6 +1089,52 @@ func (c *Client) DeleteScheduling(ctx context.Context, modelName string) error {
 	return c.NodeRegistry.DeleteModelScheduling(ctx, modelName)
 }
 
+// DrainNode drains a node or resumes it, as POST /api/nodes/:id/drain and
+// /resume do. The loads that run on the node are cancelled first; their stop
+// is retried by the reconciler, since this client holds no command sender.
+func (c *Client) DrainNode(ctx context.Context, req localaitools.DrainNodeRequest) (*localaitools.NodeDrain, error) {
+	if req.NodeID == "" {
+		return nil, errors.New("node_id is required")
+	}
+	if c.NodeRegistry == nil {
+		return nil, errors.New("draining a node is only available in distributed mode")
+	}
+	out := &localaitools.NodeDrain{NodeID: req.NodeID}
+	switch req.Action {
+	case localaitools.DrainActionResume:
+		if err := c.NodeRegistry.ResumeNode(ctx, req.NodeID); err != nil {
+			return nil, err
+		}
+		out.Status = nodes.StatusHealthy
+		return out, nil
+	case localaitools.DrainActionDrain:
+	default:
+		return nil, errors.New("action must be drain or resume")
+	}
+	timeout, err := nodes.ParseDrainTimeout(req.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	opts := nodes.DrainOptions{Force: req.Force, Timeout: timeout}
+	cancels := nodes.LoadCancelService{Registry: c.NodeRegistry}
+	if err := cancels.CancelNodeLoads(ctx, req.NodeID); err != nil {
+		xlog.Warn("Failed to cancel the loads placed on a node", "node", req.NodeID, "error", err)
+	}
+	res, err := c.NodeRegistry.DrainNode(ctx, req.NodeID, opts)
+	if err != nil {
+		return nil, err
+	}
+	out.Status = nodes.StatusDraining
+	out.Immediate = res.Immediate
+	if res.Deadline != nil {
+		out.DrainDeadline = res.Deadline.UTC().Format(time.RFC3339)
+	}
+	if n, err := c.NodeRegistry.GetWithExtras(ctx, req.NodeID); err == nil {
+		out.LeavingReplicas = n.LeavingReplicas
+	}
+	return out, nil
+}
+
 func (c *Client) SetNodeSplitServer(ctx context.Context, nodeID string, on bool) (*localaitools.NodeSplitServer, error) {
 	if c.NodeRegistry == nil {
 		return nil, errors.New("split servers are only available in distributed mode")
@@ -1034,12 +1166,90 @@ func (c *Client) SetNodeVRAMBudget(_ context.Context, _, _ string) error {
 	return errors.New("per-node VRAM budgets are only available in distributed mode")
 }
 
+func (c *Client) SetNodeLimits(ctx context.Context, req localaitools.SetNodeLimitsRequest) (*localaitools.NodeLimits, error) {
+	if c.NodeRegistry == nil {
+		return nil, errors.New("per-node limits are only available in distributed mode")
+	}
+	var err error
+	if req.Reset {
+		err = c.NodeRegistry.ResetNodeLimits(ctx, req.NodeID)
+	} else {
+		err = c.NodeRegistry.SetNodeLimits(ctx, req.NodeID, nodes.NodeLimits{
+			MaxActiveBackends:        req.MaxActiveBackends,
+			VRAMBudget:               req.VRAMBudget,
+			MemoryReclaimerThreshold: req.MemoryReclaimerThreshold,
+			ModelSwap:                req.ModelSwap,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	n, err := c.NodeRegistry.Get(ctx, req.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	l := c.NodeRegistry.NodePolicy(n).Limits()
+	return &localaitools.NodeLimits{
+		NodeID: req.NodeID, MaxActiveBackends: l.MaxActiveBackends, VRAMBudget: l.VRAMBudget,
+		MemoryReclaimerEnabled: l.MemoryReclaimerEnabled, MemoryReclaimerThreshold: l.MemoryReclaimerThreshold,
+		ModelSwap: l.ModelSwap, Sources: l.Sources,
+	}, nil
+}
+
+func (c *Client) SetModelMemoryPolicy(ctx context.Context, req localaitools.ModelMemoryPolicy) error {
+	if c.MemorySettings == nil {
+		return errors.New("the memory settings are unavailable")
+	}
+	// The DTO uses the setting names, so it maps onto the runtime settings.
+	b, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	var patch config.RuntimeSettings
+	if err := json.Unmarshal(b, &patch); err != nil {
+		return err
+	}
+	by := "assistant"
+	if u := localaitools.UserFromContext(ctx); u != nil && u.Email != "" {
+		by = u.Email
+	}
+	return c.MemorySettings(ctx, patch, by)
+}
+
+func (c *Client) ParseEngineCommand(_ context.Context, engine, command string) (*enginesettings.ParseResult, error) {
+	e, ok := builtin.Registry().Get(engine)
+	if !ok {
+		return nil, fmt.Errorf("unknown engine %q", engine)
+	}
+	res, err := e.ParseCommand(command)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) PreviewEngineCommand(_ context.Context, engine string, config enginesettings.Config) (*enginesettings.BuildResult, error) {
+	e, ok := builtin.Registry().Get(engine)
+	if !ok {
+		return nil, fmt.Errorf("unknown engine %q", engine)
+	}
+	res, err := e.BuildCommand(config)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 func (c *Client) VRAMEstimate(ctx context.Context, req localaitools.VRAMEstimateRequest) (*vram.EstimateResult, error) {
 	resp, err := modeladmin.EstimateVRAM(ctx, modeladmin.VRAMRequest{
 		Model:       req.ModelName,
 		ContextSize: uint32(req.ContextSize),
 		GPULayers:   req.GPULayers,
 		KVQuantBits: req.KVQuantBits,
+		CacheTypeK:  req.CacheTypeK,
+		CacheTypeV:  req.CacheTypeV,
+		Batch:       req.Batch,
+		UBatch:      req.UBatch,
 	}, c.ConfigLoader, c.SystemState)
 	if err != nil {
 		return nil, err
@@ -1538,7 +1748,7 @@ func (c *Client) ListP2PDevices(ctx context.Context) ([]localaitools.P2PDeviceIn
 	if c.P2P == nil {
 		return nil, errNoP2P
 	}
-	devs, err := c.P2P.ListDevices(ctx)
+	devs, err := c.P2P.ListDevices(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1547,7 +1757,7 @@ func (c *Client) ListP2PDevices(ctx context.Context) ([]localaitools.P2PDeviceIn
 		out = append(out, localaitools.P2PDeviceInfo{
 			ID: d.ID, Kind: d.Kind, Label: d.Label, PeerID: d.PeerID, Status: d.Status, Online: d.Online,
 			Path: d.Path.Kind, RelayLabel: d.Path.RelayLabel, LastSeenAt: d.LastSeenAt,
-			Models: d.Models, AllModels: d.AllModels,
+			Models: d.Models, AllModels: d.AllModels, OwnerName: d.OwnerName, SignIn: d.SignIn,
 		})
 	}
 	return out, nil
@@ -1610,6 +1820,42 @@ func (c *Client) SetP2PRelayLimits(ctx context.Context, id string, req localaito
 		return nil, err
 	}
 	return relayLimitsInfo(info), nil
+}
+
+func (c *Client) GetP2PUserPairing(ctx context.Context) (*localaitools.P2PUserPairingInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	st, err := c.P2P.UserPairing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return userPairingInfo(st), nil
+}
+
+func (c *Client) SetP2PUserPairing(ctx context.Context, req localaitools.SetP2PUserPairingRequest) (*localaitools.P2PUserPairingInfo, error) {
+	if c.P2P == nil {
+		return nil, errNoP2P
+	}
+	by := ""
+	if u := localaitools.UserFromContext(ctx); u != nil {
+		by = u.ID
+	}
+	st, err := c.P2P.SetUserPairing(ctx, by, p2papi.SetUserPairingRequest{
+		Relays: req.Relays, AllowOpenRelay: req.AllowOpenRelay, OmitLANAddrs: req.OmitLANAddrs,
+		MaxDevices: req.MaxDevices, MaxPending: req.MaxPending, MaxTTLSeconds: req.MaxTTLSeconds,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return userPairingInfo(st), nil
+}
+
+func userPairingInfo(s p2papi.UserPairingSettings) *localaitools.P2PUserPairingInfo {
+	return &localaitools.P2PUserPairingInfo{
+		Relays: s.Relays, AllowOpenRelay: s.AllowOpenRelay, OmitLANAddrs: s.OmitLANAddrs,
+		MaxDevices: s.MaxDevices, MaxPending: s.MaxPending, MaxTTLSeconds: s.MaxTTLSeconds,
+	}
 }
 
 func relayLimitsInfo(i p2papi.RelayLimitsInfo) *localaitools.P2PRelayLimitsInfo {

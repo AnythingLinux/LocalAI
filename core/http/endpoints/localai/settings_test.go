@@ -181,6 +181,34 @@ var _ = Describe("Settings endpoints", func() {
 		Expect(cfg.EffectiveChatsToolSearch()).To(Equal("auto"))
 	})
 
+	It("takes the incognito policy and its highest level and rejects other values", func() {
+		cfg := app.ApplicationConfig()
+		get := func() map[string]any {
+			req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			var settings map[string]any
+			Expect(json.Unmarshal(rec.Body.Bytes(), &settings)).To(Succeed())
+			return settings
+		}
+		Expect(get()).To(HaveKeyWithValue("incognito", "allow"))
+		Expect(get()).To(HaveKeyWithValue("incognito_max_level", "zero-retention"))
+		rec := post(`{"incognito":"forbid","incognito_max_level":"memory-off"}`)
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(string(cfg.IncognitoPolicy())).To(Equal("forbid"))
+		Expect(cfg.IncognitoMaxLevel().String()).To(Equal("memory-off"))
+		rec = post(`{"incognito":"force"}`)
+		Expect(rec.Code).To(Equal(http.StatusBadRequest))
+		Expect(rec.Body.String()).To(ContainSubstring("Invalid incognito"))
+		rec = post(`{"incognito_max_level":"normal"}`)
+		Expect(rec.Code).To(Equal(http.StatusBadRequest))
+		Expect(string(cfg.IncognitoPolicy())).To(Equal("forbid"), "the bad value changed nothing")
+		rec = post(`{"incognito":"allow","incognito_max_level":"zero-retention"}`)
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(string(cfg.IncognitoPolicy())).To(Equal("allow"))
+	})
+
 	It("rejects a host-commands mode and pins the chats do not understand", func() {
 		rec := post(`{"chats_host_exec":"always"}`)
 		Expect(rec.Code).To(Equal(http.StatusBadRequest))
@@ -224,6 +252,11 @@ var _ = Describe("Settings endpoints", func() {
 			`{"chats_index_max_text_bytes":1024}`:                                      "Invalid chats_index_max_text_bytes",
 			`{"chats_index_max_text_bytes":33554432}`:                                  "Invalid chats_index_max_text_bytes",
 			`{"chats_extract_max_bytes":1024}`:                                         "Invalid chats_extract_max_bytes",
+			`{"plugins_hook_timeout_seconds":601}`:                                     "Invalid plugins_hook_timeout_seconds",
+			`{"plugins_hook_timeout_seconds":0}`:                                       "Invalid plugins_hook_timeout_seconds",
+			`{"plugins_max_bytes":1024}`:                                               "Invalid plugins_max_bytes",
+			`{"plugins_model_tiers":{"gpt":"x"}}`:                                      "Invalid plugins_model_tiers",
+			`{"plugins_model_tiers":{"opus":""}}`:                                      "Invalid plugins_model_tiers",
 			`{"chats_extract_max_entries":0}`:                                          "Invalid chats_extract_max_entries",
 			`{"chats_extract_max_entries":2000000}`:                                    "Invalid chats_extract_max_entries",
 			`{"chats_egress_allow_private":true}`:                                      "chats_egress_private_confirm",
@@ -266,6 +299,24 @@ var _ = Describe("Settings endpoints", func() {
 		raw, err := os.ReadFile(filepath.Join(tmp, "runtime_settings.json"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(raw)).To(ContainSubstring(`"chats_max_iterations": 80`))
+	})
+
+	It("checks and saves the limit on add-on tools of a chat", func() {
+		cfg := app.ApplicationConfig()
+		Expect(cfg.EffectiveChatsAddonToolLimit()).To(Equal(config.DefaultChatsAddonToolLimit), "unset: the default")
+		for _, body := range []string{`{"chats_addon_tool_limit":0}`, `{"chats_addon_tool_limit":15}`, `{"chats_addon_tool_limit":257}`} {
+			rec := post(body)
+			Expect(rec.Code).To(Equal(http.StatusBadRequest), body)
+			Expect(rec.Body.String()).To(ContainSubstring("Invalid chats_addon_tool_limit"), body)
+		}
+		for _, body := range []string{`{"chats_addon_tool_limit":16}`, `{"chats_addon_tool_limit":256}`, `{"chats_addon_tool_limit":96}`} {
+			rec := post(body)
+			Expect(rec.Code).To(Equal(http.StatusOK), body+" "+rec.Body.String())
+		}
+		Expect(cfg.EffectiveChatsAddonToolLimit()).To(Equal(96), "applies at once, with no restart")
+		raw, err := os.ReadFile(filepath.Join(tmp, "runtime_settings.json"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(raw)).To(ContainSubstring(`"chats_addon_tool_limit": 96`))
 	})
 
 	It("checks and saves the limits of a chat's goal", func() {

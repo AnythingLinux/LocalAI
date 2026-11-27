@@ -68,6 +68,11 @@ func Middleware(db *gorm.DB, appConfig *config.ApplicationConfig) echo.Middlewar
 					c.Set(contextKeyUser, user)
 					c.Set(contextKeyRole, user.Role)
 					authenticated = true
+					// A paired client's key is a device acting for its owner, not
+					// the person being active.
+					if key, ok := c.Get(contextKeyAPIKey).(*UserAPIKey); !ok || !key.IsClientKey() {
+						TouchLastActive(db, user)
+					}
 
 					// Session rotation for cookie-based sessions
 					if session, ok := c.Get("_auth_session").(*Session); ok {
@@ -106,7 +111,7 @@ func Middleware(db *gorm.DB, appConfig *config.ApplicationConfig) echo.Middlewar
 
 			// 4. Public rules are evaluated after authentication so public handlers
 			// can still observe a valid user when credentials are supplied.
-			public := isPublicRoute(c.Request().Method, path)
+			public := isPublicRequest(c)
 			overridden := isExemptPath(path, appConfig)
 			alternativeAuth := usesAlternativeAuthentication(path)
 			if authenticated || public || overridden || alternativeAuth {
@@ -198,7 +203,7 @@ func RequireFeature(db *gorm.DB, feature string) echo.MiddlewareFunc {
 			}
 			val, exists := perm.Permissions[feature]
 			if !exists {
-				if !isDefaultOnFeature(feature) {
+				if !isDefaultOnFeature(db, feature) {
 					return c.JSON(http.StatusForbidden, schema.ErrorResponse{
 						Error: &schema.APIError{
 							Message: "feature not enabled for your account",
@@ -304,7 +309,7 @@ func RequireRouteFeature(db *gorm.DB) echo.MiddlewareFunc {
 			// that does carry a client key is no preflight, and a route that a
 			// later change registers for every method (Any) would otherwise
 			// answer it. It takes the same deny-by-default path as any other.
-			if ck := ClientKey(c); ck != nil && (method == http.MethodOptions || !isPublicRoute(method, c.Request().URL.Path)) {
+			if ck := ClientKey(c); ck != nil && (method == http.MethodOptions || !isPublicRequest(c)) {
 				if clientFeature == "" || !ck.ClientAllows(clientFeature) {
 					return c.JSON(http.StatusForbidden, schema.ErrorResponse{
 						Error: &schema.APIError{
@@ -338,7 +343,7 @@ func RequireRouteFeature(db *gorm.DB) echo.MiddlewareFunc {
 			}
 			val, exists := perm.Permissions[feature]
 			if !exists {
-				if !isDefaultOnFeature(feature) {
+				if !isDefaultOnFeature(db, feature) {
 					return c.JSON(http.StatusForbidden, schema.ErrorResponse{
 						Error: &schema.APIError{
 							Message: "feature not enabled for your account: " + feature,
@@ -531,7 +536,7 @@ func tryAuthenticate(c echo.Context, db *gorm.DB, appConfig *config.ApplicationC
 
 	// a. Session cookie -> web UI
 	if cookie, err := c.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-		if user, session := ValidateSession(db, cookie.Value, hmacSecret); user != nil {
+		if user, session := ValidateRequestSession(c.Request().Context(), db, cookie.Value, hmacSecret); user != nil {
 			// Store session for rotation check in middleware
 			c.Set("_auth_session", session)
 			c.Set(contextKeyTicketCredential, ticketCredential{"Cookie", cookie.String()})
@@ -546,7 +551,7 @@ func tryAuthenticate(c echo.Context, db *gorm.DB, appConfig *config.ApplicationC
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// b1. Session token via Bearer -> still web UI
-		if user, _ := ValidateSession(db, token, hmacSecret); user != nil {
+		if user, _ := ValidateRequestSession(c.Request().Context(), db, token, hmacSecret); user != nil {
 			c.Set(contextKeyHeaderAuthenticated, true)
 			c.Set(contextKeyTicketCredential, ticketCredential{"Authorization", authHeader})
 			c.Set(contextKeySource, UsageSourceWeb)

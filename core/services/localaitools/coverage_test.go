@@ -38,11 +38,14 @@ var toolToHTTPRoute = map[string]string{
 	ToolListBackendLibraryUpdates: "GET /backends/library/updates",
 	ToolBackendUpdates:            "GET /backends/updates (action list), POST /backends/updates/check (action check)",
 	ToolModelUpdates:              "GET /api/models/updates (action list), POST /api/models/updates/check (action check)",
+	ToolUpgradeRunStatus:          "GET /api/updates/runs/:id (id), GET /api/updates/runs (no id)",
 	ToolSystemInfo:                "GET /version + GET /system (composed)",
 	ToolListNodes:                 "GET /api/nodes",
 	ToolListScheduling:            "GET /api/nodes/scheduling",
 	ToolGetScheduling:             "GET /api/nodes/scheduling/:model",
 	ToolVRAMEstimate:              "POST /api/models/vram-estimate",
+	ToolParseEngineCommand:        "POST /api/engines/:engine/parse-command",
+	ToolPreviewEngineCommand:      "POST /api/engines/:engine/command-preview",
 	ToolGetBranding:               "GET /api/branding",
 	ToolGetUsageStats:             "GET /api/usage (or /api/usage/all when all=true)",
 	ToolGetPIIEvents:              "GET /api/pii/events",
@@ -65,6 +68,11 @@ var toolToHTTPRoute = map[string]string{
 	ToolListFederation:            "GET /api/federation",
 	ToolListP2PSplitWorkers:       "GET /api/p2p/split-workers",
 	ToolGetP2PRelayLimits:         "GET /api/p2p/relays/:id/limits",
+	ToolGetP2PUserPairing:         "GET /api/p2p/user-pairing",
+	ToolPlugins: "GET /api/plugins/marketplaces (list_marketplaces), POST /api/plugins/marketplaces (add_marketplace), POST /api/plugins/marketplaces/:id/refresh (refresh_marketplace), " +
+		"GET /api/plugins/catalog (browse), GET /api/plugins/installs (list_installed, check_updates without id), " +
+		"POST /api/plugins/inspect + POST /api/plugins/installs (install, a plugin that runs no code), POST /api/plugins/installs/:id/update/preview (check_updates with id), " +
+		"PUT /api/plugins/installs/:id/me (enable, disable), DELETE /api/plugins/installs/:id (remove)",
 
 	// Mutating tools.
 	ToolInstallModel:             "POST /models/apply",
@@ -78,6 +86,8 @@ var toolToHTTPRoute = map[string]string{
 	ToolInstallLibraryBackend:    "POST /backends/library/install",
 	ToolUpgradeBackend:           "POST /backends/upgrade/:name",
 	ToolUpgradeModel:             "POST /api/models/upgrade/:name (upgrade, config_only), POST /api/models/:name/upgrade/retry (retry), POST /api/models/:name/remove-old (remove_old), PUT /api/models/:name/hold (hold, unhold), POST /api/models/:name/adopt (adopt)",
+	ToolUpgradeRunStart:          "POST /api/updates/runs",
+	ToolUpgradeRunCancel:         "POST /api/updates/runs/:id/cancel (no key), POST /api/updates/runs/:id/items/:key/cancel (key)",
 	ToolToggleModelState:         "PUT /models/toggle-state/:name/:action",
 	ToolToggleModelPinned:        "PUT /models/toggle-pinned/:name/:action",
 	ToolSetBranding:              "POST /api/settings (instance_name, instance_tagline)",
@@ -91,6 +101,8 @@ var toolToHTTPRoute = map[string]string{
 	ToolSetSharedFolderMember:    "PUT /api/chats/admin/shared-folders/:id/members/:principal",
 	ToolRemoveSharedFolderMember: "DELETE /api/chats/admin/shared-folders/:id/members/:principal",
 	ToolSetNodeVRAMBudget:        "PUT /api/nodes/:id/vram-budget",
+	ToolSetNodeLimits:            "PUT /api/nodes/:id/limits (values), DELETE /api/nodes/:id/limits (reset)",
+	ToolSetModelMemoryPolicy:     "POST /api/settings (max_active_backends, model_swap, size_aware_eviction, force_eviction_when_busy, lru_eviction_*, watchdog_idle_*, memory_reclaimer_*, vram_budget)",
 	ToolSetScheduling:            "POST /api/nodes/scheduling",
 	ToolDeleteScheduling:         "DELETE /api/nodes/scheduling/:model",
 	ToolPinFailoverTarget:        "POST /api/failover/:chain/pin",
@@ -101,7 +113,9 @@ var toolToHTTPRoute = map[string]string{
 	ToolSetP2PSplitSlowPath:      "PATCH /api/p2p/split-workers/:id",
 	ToolSetP2PSplitNode:          "PATCH /api/p2p/split-workers/:id (node_id)",
 	ToolSetNodeSplitServer:       "PUT /api/nodes/:id/split-server",
+	ToolDrainNode:                "POST /api/nodes/:id/drain (action drain), POST /api/nodes/:id/resume (action resume)",
 	ToolSetP2PRelayLimits:        "PUT /api/p2p/relays/:id/limits",
+	ToolSetP2PUserPairing:        "PUT /api/p2p/user-pairing",
 	ToolSetCarrierWeights:        "PUT /api/cluster/settings (carrier_weights)",
 	// chats_egress_allow_private is deliberately not a tool (uiOnly): see
 	// adminRoutesWithoutTool.
@@ -134,6 +148,13 @@ func init() {
 // must not be wrapped by a tool too (the spec below checks it); to add a tool
 // for one, move it to toolToHTTPRoute.
 var adminRoutesWithoutTool = map[string]string{
+	// Upgrade runs: the assistant starts, reads and cancels runs of backends
+	// and models. The preview is the Updates page's list (backend_updates and
+	// model_updates give the same facts), and retry and dismiss are clicks on
+	// a finished run there; add-on items need the browser session anyway.
+	"POST /api/updates/runs/preview":   "backend_updates and model_updates give the assistant the same list",
+	"POST /api/updates/runs/:id/retry": "a retry may include add-on items, which need the administrator's own browser session",
+	"DELETE /api/updates/runs/:id":     "hiding a finished run is a click on the Updates page",
 	// Remotes hold the address and API key of another server. The
 	// key is write-only and credential handling for a remote does
 	// not belong in the always-sent assistant tool budget: a person manages
@@ -146,6 +167,11 @@ var adminRoutesWithoutTool = map[string]string{
 	"DELETE /api/remotes/:id":       "credential handling for a remote does not belong in the always-sent assistant tool budget",
 	"POST /api/remotes/:id/refresh": "credential handling for a remote does not belong in the always-sent assistant tool budget",
 	"POST /api/remotes/:id/adopt":   "credential handling for a remote does not belong in the always-sent assistant tool budget",
+	// A join token is a credential shown once: a person mints it on the Nodes
+	// page and passes it on, like a P2P invite. It must not pass through a chat.
+	"POST /api/cluster/join-tokens":       "the token is a credential shown once: a person mints it and passes it on",
+	"GET /api/cluster/join-tokens":        "the list of join tokens is read on the Nodes page; minting stays a person's act",
+	"DELETE /api/cluster/join-tokens/:id": "revoking a join token is done on the Nodes page next to the list",
 	// P2P: an invite link and a relay claim code are credentials that must
 	// not pass through a chat; a new identity unpairs every device; the
 	// relay admin and the mode are set on the Swarm, P2P page.
@@ -185,6 +211,20 @@ var adminRoutesWithoutTool = map[string]string{
 	// needs to read or change it.
 	"GET /api/models/search/sources": "the sources and the enabled set of the person: read in the search panel; search_models uses the enabled set",
 	"PUT /api/models/search/sources": "the enabled set is a personal choice made in the search panel, not something a model changes",
+	// Plugins: the install of a plugin that runs code and a rollback need
+	// the administrator's own browser session (the request carries
+	// X-LocalAI-Confirm), as the add-on host grants do. An update is a review
+	// of the files that change: the assistant reads the preview with
+	// check_updates and points to the Plugins tab, where a person reads the
+	// file list and the diffs. An update whose code changed also needs the
+	// browser session.
+	"POST /api/plugins/installs (a plugin that runs code)": "needs the administrator's browser session",
+	"POST /api/plugins/installs/:id/update":                "an update is the review of the files that change, done on the Plugins tab; an update whose code changed also needs the administrator's browser session",
+	"POST /api/plugins/installs/:id/rollback":              "needs the administrator's browser session",
+	"PUT /api/plugins/marketplaces/:id":                    "changing the ref or the switch of a marketplace is done on the Plugins tab; remove and add cover the assistant's needs",
+	"DELETE /api/plugins/marketplaces/:id":                 "removing a marketplace is a person's act on the Plugins tab, next to the installs that came from it",
+	"PUT /api/plugins/installs/:id/me (reenable)":          "turning on an install that gained code accepts that code in the person's chats: a person's act on the Plugins tab",
+	"PUT /api/plugins/installs/:id/me (config)":            "plugin settings are a form on the Plugins tab",
 	// A diagnostic button of Settings > Tools, not a setting to manage.
 	"POST /api/chats/admin/web/test": "a diagnostic button: it runs one search and changes nothing",
 	// Settings of the chats that change what commands may do on this machine
@@ -208,6 +248,7 @@ var adminRoutesWithoutTool = map[string]string{
 	// Settings of every user's chats. A chat about the instance has no need
 	// to change them, and the first one is a limit a model must not raise
 	// for itself. A person sets them in Settings.
+	"POST /api/settings (chats_addon_tool_limit)":     "the most add-on tools every chat is offered, which costs model context: a model must not raise its own limit; set in Settings > Tools",
 	"POST /api/settings (chats_max_iterations)":       "the step limit of every chat turn: a model must not raise its own limit; set in Settings > Tools",
 	"POST /api/settings (chats_loop_*)":               "the limits of the loops and waits of every chat (interval, runs, counts, daily runs and daily script checks): a model must not raise the limits of its own loops; set in Settings > Tools",
 	"POST /api/settings (chats_work_folder)":          "where every chat keeps its helper files: set in Settings > Tools",
@@ -220,6 +261,7 @@ var adminRoutesWithoutTool = map[string]string{
 	"POST /api/settings (chats_suggestions)":          "the default of each user's own choice of assistant offers: set in Settings > Agents",
 	"POST /api/settings (chats_vision_model)":         "the helper model of describe_image: set in Settings > Agents, with the model picker",
 	"POST /api/settings (chats_transcription_model)":  "the helper model of transcribe_audio: set in Settings > Agents, with the model picker",
+	"GET /api/nodes/:id/limits":                       "the effective limits of a node: set_node_limits returns them after a change; read on the Nodes page",
 }
 
 // allKnownTools is the union of expectedFullCatalog (defined in

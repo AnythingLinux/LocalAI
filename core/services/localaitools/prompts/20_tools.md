@@ -16,7 +16,9 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `list_known_backends` — List backends available to install from configured backend galleries.
 - `get_job_status` — Poll the status of an install/delete/upgrade job by id.
 - `get_model_config` — Read the YAML/JSON config of an installed model.
-- `vram_estimate` — Estimate VRAM use for a model under a given config.
+- `vram_estimate` — Estimate VRAM use for a model under a given config: context size, GPU layers, KV cache types and batch sizes. Its `runtime` part splits out the KV cache and the compute buffers.
+- `parse_engine_command` — Read an engine command line into config keys. Never runs it.
+- `preview_engine_command` — Write the engine command line for a model config.
 - `system_info` — LocalAI version, paths, distributed flag, loaded models, installed backends.
 - `list_nodes` — List federated worker nodes (only useful in distributed mode).
 - `list_scheduling` — List distributed per-model scheduling configs.
@@ -42,7 +44,9 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `list_p2p_relays` — List the P2P relays and their sync state.
 - `list_federation` — List the LocalAI instances (this server and LocalAI remotes) and the federation groups with member health and load.
 - `list_p2p_split_workers` — List the model-split workers (llama.cpp RPC, MLX), their state, path and memory.
+- `plugins` — Plugins in the Claude Code plugin format, one `action`. Read: `list_marketplaces`, `browse`, `list_installed`, `check_updates`. Change (confirm first): `add_marketplace`, `refresh_marketplace`, `install` (plugins that run no code only), `enable`, `disable`, `remove`.
 - `get_p2p_relay_limits` — Read the data, time and bandwidth limits of one circuit on a P2P relay, the ceiling the relay operator set for each, and whether this server may change them.
+- `get_p2p_user_pairing` — Read how users pair their own phones over P2P: the relays of their invites, open relays, local addresses and the limits of each user.
 
 ## Mutating (require user confirmation per safety rule 1)
 
@@ -53,6 +57,9 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `install_library_backend` — Install a backend from an add-on library entry by `source_id`, `name` and `version`. The call returns when the install is done, with no job id. The backend gallery is not changed.
 - `upgrade_backend` — Upgrade an installed backend by name. Same refusal as `install_backend` on such servers.
 - `upgrade_model` — One `action` on a gallery model: `upgrade`, `config_only`, `retry`, `remove_old`, `hold`, `unhold`, `adopt`. An upgrade is a job: poll `get_job_status`.
+- `upgrade_run_start` — Update several backends and gallery models in one server-owned run (backends first, then models one at a time). Items are `{kind, name, expected_to}` with kind `gallery`, `library` or `model`. Never add-ons.
+- `upgrade_run_status` — One run by `id`, or the running and recent runs: phase, progress and error of each item.
+- `upgrade_run_cancel` — Cancel a run, or one item of it (`key`).
 - `edit_model_config` — Patch (deep-merge) JSON into an installed model's config.
 - `reload_models` — Reload all model configs from disk.
 - `cancel_model_load` — Cancel one distributed load by the exact job_id from load-status. `stopping` means pending, not proof the work stopped.
@@ -71,6 +78,8 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `set_shared_folder_member` — Give a user (ID, email or name) or `@everyone` `read` or `write` access to a shared folder, or change it.
 - `remove_shared_folder_member` — Take a member's access to a shared folder away.
 - `set_node_vram_budget` — Set or clear a federated node's VRAM budget override.
+- `set_node_limits` — Override one node's memory settings (models kept loaded, GPU budget, threshold, model swap), or reset them.
+- `set_model_memory_policy` — Change Settings > Models in memory (model limit, model swap, eviction, idle unload, reclaimer, GPU budget).
 - `set_scheduling` — Create or update a distributed per-model scheduling config.
 - `delete_scheduling` — Remove a distributed per-model scheduling config.
 - `pin_failover_target` — Force a failover chain to one target.
@@ -80,6 +89,8 @@ The MCP `tools/list` endpoint also exposes the full input schema for each of the
 - `manage_federation_group` — Create, update or delete a federation group, or drain or undrain one member.
 - `set_p2p_split_slow_path` — Use a model-split worker over a relay ("Use anyway"), or stop; a relay of the user with limits cuts each connection at them.
 - `set_p2p_split_node` — Attach a model-split worker to a backend node of the cluster, or to this server; pin the model to that node.
+- `drain_node` — Drain a backend node (its models keep serving until replacements load elsewhere; `force` removes them at once) or resume a draining node.
 - `set_node_split_server` — Declare a backend node a split server so model-split workers can be attached to it, or clear it (detaches its workers, stops its P2P host).
 - `set_carrier_weights` — Change one or more carrier weights (whole numbers 0 to 1000; a weight left out stays). 0 means: use that carrier only when no other fits. Applies to every frontend within seconds.
 - `set_p2p_relay_limits` — Change the data, time or bandwidth limit of one circuit on a P2P relay this server administers, up to the relay's ceiling (a value above it is refused); a new data or time limit restarts the relay's circuit service.
+- `set_p2p_user_pairing` — Change how users pair their own phones over P2P (relays auto or none, open relays, local addresses, devices per user 1 to 100, pending invites per user 1 to 20, invite life 60 to 86400 seconds); a field left out stays.

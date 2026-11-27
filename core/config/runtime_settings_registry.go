@@ -248,6 +248,10 @@ var runtimeSettingsFields = []fieldSpec{
 		func(s *RuntimeSettings) **string { return &s.LRUEvictionRetryInterval },
 		func(o *ApplicationConfig) *time.Duration { return &o.LRUEvictionRetryInterval },
 		"1s"),
+	field("model_swap",
+		func(s *RuntimeSettings) **bool { return &s.ModelSwap },
+		func(o *ApplicationConfig) bool { return !o.DisableModelSwap },
+		func(o *ApplicationConfig, v bool) { o.DisableModelSwap = !v }),
 
 	// Performance.
 	field("threads",
@@ -579,6 +583,33 @@ var runtimeSettingsFields = []fieldSpec{
 			o.ChatsToolSearch = v
 			return true
 		}),
+	// Incognito conversations: read at each request, so no restart.
+	withApply(field("incognito",
+		func(s *RuntimeSettings) **string { return &s.Incognito },
+		func(o *ApplicationConfig) string { return string(o.IncognitoPolicy()) },
+		func(o *ApplicationConfig, v string) { o.Incognito = v }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			v := strings.ToLower(strings.TrimSpace(*s.Incognito))
+			if !ValidIncognito(v) {
+				xlog.Warn("invalid incognito in runtime settings", "value", v)
+				return false
+			}
+			o.Incognito = v
+			return true
+		}),
+	withApply(field("incognito_max_level",
+		func(s *RuntimeSettings) **string { return &s.IncognitoMaxLevel },
+		func(o *ApplicationConfig) string { return o.IncognitoMaxLevel().String() },
+		func(o *ApplicationConfig, v string) { o.IncognitoMaxLevelName = v }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			v := strings.ToLower(strings.TrimSpace(*s.IncognitoMaxLevel))
+			if !ValidIncognitoMaxLevel(v) {
+				xlog.Warn("invalid incognito_max_level in runtime settings", "value", v)
+				return false
+			}
+			o.IncognitoMaxLevelName = v
+			return true
+		}),
 	// The saved agents as sub-agents of a chat: read at each turn, so no
 	// restart. Stored as the negation, so it is on by default.
 	field("chats_saved_agents",
@@ -591,6 +622,51 @@ var runtimeSettingsFields = []fieldSpec{
 		func(s *RuntimeSettings) **bool { return &s.ChatsWorkFolder },
 		func(o *ApplicationConfig) bool { return !o.DisableChatsWorkFolder },
 		func(o *ApplicationConfig, v bool) { o.DisableChatsWorkFolder = !v }),
+	// Plugins in the Claude Code plugin format: read by the Plugins service
+	// at each request, so no restart.
+	field("plugins_user_installs",
+		func(s *RuntimeSettings) **bool { return &s.PluginsUserInstalls },
+		func(o *ApplicationConfig) bool { return !o.Plugins.DisableUserInstalls },
+		func(o *ApplicationConfig, v bool) { o.Plugins.DisableUserInstalls = !v }),
+	withApply(fieldEq("plugins_model_tiers",
+		func(s *RuntimeSettings) **map[string]string { return &s.PluginsModelTiers },
+		func(o *ApplicationConfig) map[string]string { return o.PluginModelTiers() },
+		func(o *ApplicationConfig, v map[string]string) { o.Plugins.ModelTiers = maps.Clone(v) },
+		func(a, b map[string]string) bool { return maps.Equal(a, b) }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			for k, v := range *s.PluginsModelTiers {
+				if !slices.Contains(PluginModelTierNames, k) || strings.TrimSpace(v) == "" {
+					xlog.Warn("invalid plugins_model_tiers in runtime settings", "tier", k)
+					return false
+				}
+			}
+			o.Plugins.ModelTiers = maps.Clone(*s.PluginsModelTiers)
+			return true
+		}),
+	withApply(field("plugins_hook_timeout_seconds",
+		func(s *RuntimeSettings) **int { return &s.PluginsHookTimeoutSeconds },
+		func(o *ApplicationConfig) int { return o.EffectivePluginHookTimeoutSeconds() },
+		func(o *ApplicationConfig, v int) { o.Plugins.HookTimeoutSeconds = v }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			if v := *s.PluginsHookTimeoutSeconds; v < 1 || v > MaxPluginHookTimeoutSeconds {
+				xlog.Warn("invalid plugins_hook_timeout_seconds in runtime settings", "value", v)
+				return false
+			}
+			o.Plugins.HookTimeoutSeconds = *s.PluginsHookTimeoutSeconds
+			return true
+		}),
+	withApply(field("plugins_max_bytes",
+		func(s *RuntimeSettings) **int64 { return &s.PluginsMaxBytes },
+		func(o *ApplicationConfig) int64 { return o.EffectivePluginMaxBytes() },
+		func(o *ApplicationConfig, v int64) { o.Plugins.MaxBytes = v }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			if v := *s.PluginsMaxBytes; v < MinPluginMaxBytes || v > MaxPluginMaxBytes {
+				xlog.Warn("invalid plugins_max_bytes in runtime settings", "value", v)
+				return false
+			}
+			o.Plugins.MaxBytes = *s.PluginsMaxBytes
+			return true
+		}),
 	// The text index of the documents in the chats' files: read at each pass
 	// of the indexer, so no restart. The switch is stored as the negation, so
 	// it is on by default; the snapshot of the cap is the cap that applies.
@@ -763,6 +839,22 @@ var runtimeSettingsFields = []fieldSpec{
 				return false
 			}
 			o.setChatsEgressAuditDays(*s.ChatsEgressAuditDays)
+			return true
+		}),
+
+	// The cap on add-on tools one chat is offered: read at each discovery, so
+	// no restart. The snapshot is the limit that applies, so the page shows 64
+	// while the setting is unset.
+	withApply(field("chats_addon_tool_limit",
+		func(s *RuntimeSettings) **int { return &s.ChatsAddonToolLimit },
+		func(o *ApplicationConfig) int { return o.EffectiveChatsAddonToolLimit() },
+		func(o *ApplicationConfig, v int) { o.setChatsAddonToolLimit(v) }),
+		func(o *ApplicationConfig, s *RuntimeSettings) bool {
+			if v := *s.ChatsAddonToolLimit; v < MinChatsAddonToolLimit || v > MaxChatsAddonToolLimit {
+				xlog.Warn("invalid chats_addon_tool_limit in runtime settings", "value", v)
+				return false
+			}
+			o.setChatsAddonToolLimit(*s.ChatsAddonToolLimit)
 			return true
 		}),
 

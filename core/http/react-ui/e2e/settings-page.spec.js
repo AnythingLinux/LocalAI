@@ -258,7 +258,8 @@ test.describe('Settings: pending, diff, apply, discard and undo', () => {
 
   test('leaving with unapplied edits asks first', async ({ page }) => {
     await row(page, 'watchdog_idle_timeout').getByRole('textbox').fill('30m')
-    await page.locator('.dk-hubtabs a[href="/app/traffic"]').click()
+    await page.locator('[data-testid="admin-nav"] [data-group="traffic"] button').click()
+    await page.locator('[data-testid="admin-nav"] a[data-admin-item="/app/traffic"]').click()
     await expect(page.getByRole('alertdialog')).toBeVisible()
   })
 })
@@ -401,5 +402,25 @@ test.describe('Settings: reduced motion', () => {
     expect(seconds).toBeLessThan(0.001)
     const sw = await page.locator('.dk-switch').first().evaluate(el => parseFloat(getComputedStyle(el).transitionDuration))
     expect(sw).toBeLessThan(0.001)
+  })
+})
+
+test.describe('Settings: model swap', () => {
+  test('turns model swap off and says it applies to every node in a cluster', async ({ page }) => {
+    const state = await mockSettings(page, { model_swap: true, memory_scope: 'cluster', memory_revision: 3 })
+    await page.goto('/app/settings')
+    await expect(page.getByTestId('settings-memory-cluster')).toContainText('Applies to every worker node')
+    await expect(row(page, 'model_swap')).toContainText('Swap models when memory is full')
+    await expect(page.getByTestId('st-extra-vram_budget')).toContainText('on each worker node')
+    await sw(page, 'model_swap').click()
+    await page.getByRole('button', { name: 'Apply' }).click()
+    await expect.poll(() => state.posts.at(-1)).toMatchObject({ model_swap: false })
+  })
+
+  test('shows no cluster note on a single server', async ({ page }) => {
+    await mockSettings(page)
+    await page.goto('/app/settings')
+    await expect(row(page, 'model_swap')).toBeVisible()
+    await expect(page.getByTestId('settings-memory-cluster')).toHaveCount(0)
   })
 })

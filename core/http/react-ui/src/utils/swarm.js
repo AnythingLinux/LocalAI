@@ -8,7 +8,7 @@
 // these functions can see, so every answer that depends on that says so
 // instead of guessing.
 
-import { capacityReading, summarizeFleet } from './nodeFleet.js'
+import { capacityReading, summarizeFleet, vramReading } from './nodeFleet.js'
 
 // ---- State ------------------------------------------------------------------
 
@@ -55,7 +55,7 @@ export function attentionOf(nodes) {
 // The memory a node offers for models: GPU memory when it reports any, system
 // memory otherwise. Null when the node reports neither.
 export function memoryOf(node) {
-  const vram = capacityReading(node?.total_vram, node?.available_vram)
+  const vram = vramReading(node)
   if (vram) return { kind: 'gpu', ...vram }
   const ram = capacityReading(node?.total_ram, node?.available_ram)
   if (ram) return { kind: 'ram', ...ram }
@@ -221,6 +221,20 @@ export function updateTargets({ upgrades, nodes, selectedIds }) {
     backends: [...new Set(pairs.map(p => p.backend))],
     nodeIds: [...new Set(pairs.map(p => p.nodeId))],
   }
+}
+
+// The (backend, node) pairs of the update of one worker. When the cluster
+// reports which nodes drifted from the majority, a node that did not drift has
+// nothing to update, so the pairs of a backend that names other nodes are left
+// out.
+export function updateTargetsForNode({ upgrades, nodes, nodeId }) {
+  const targets = updateTargets({ upgrades, nodes, selectedIds: new Set([nodeId]) })
+  const drift = new Map(Object.values(upgrades || {}).filter(u => u?.backend_name).map(u => [u.backend_name, (u.node_drift || []).map(d => d.node_id)]))
+  const pairs = targets.pairs.filter(pair => {
+    const named = drift.get(pair.backend) || []
+    return named.length === 0 || named.includes(nodeId)
+  })
+  return { ...targets, pairs, backends: [...new Set(pairs.map(p => p.backend))], nodeIds: [...new Set(pairs.map(p => p.nodeId))] }
 }
 
 // ---- Adding a node -------------------------------------------------------------

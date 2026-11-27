@@ -40,6 +40,7 @@ Pick an add-on below. An administrator installs it, and anyone with the `addons`
 | [Home Assistant]({{% relref "/addons/catalogue/services/home-assistant" %}}) | Read a smart home, and switch things within limits you set. |
 | [PiKVM]({{% relref "/addons/catalogue/services/pikvm" %}}) | Check the status of a PiKVM. If you allow it, press its power buttons and type on its keyboard. |
 | [SSH]({{% relref "/addons/catalogue/services/ssh" %}}) | Run a command on a remote machine, with a confirmation each time. |
+| [Kubernetes]({{% relref "/addons/catalogue/services/kubernetes" %}}) | Read a Kubernetes cluster, and change it with a confirmation and a policy for each cluster. |
 
 ## Models and media
 
@@ -51,6 +52,7 @@ Pick an add-on below. An administrator installs it, and anyone with the `addons`
 | [Face]({{% relref "/addons/catalogue/models-and-media/face" %}}) | Identify a face in a photo, or check whether two photos show the same person. |
 | [Fine-tuning]({{% relref "/addons/catalogue/models-and-media/fine-tuning" %}}) | The Fine-Tune page and chat tools for fine-tuning jobs. |
 | [Quantization]({{% relref "/addons/catalogue/models-and-media/quantization" %}}) | The Quantize page and chat tools for quantization jobs. |
+| [Ollama search]({{% relref "/addons/catalogue/models-and-media/ollama-search" %}}) | Search the Ollama library for models from the Models page. |
 | [Pirate Face search]({{% relref "/addons/catalogue/models-and-media/pirateface-search" %}}) | Search Pirate Face for open models from the Models page. |
 
 To build an add-on, see [Build your own add-on]({{% relref "/addons/build-your-own" %}}).

@@ -94,6 +94,8 @@ type ConnectorSwitch struct {
 	ID, Name    string
 	Off, Usable bool
 	Reason      string
+	// PluginInstall is the plugin install that owns the connector, or "".
+	PluginInstall string
 }
 
 // ToolsPanel is what a chat can use besides its built-in tools, each with the
@@ -113,6 +115,10 @@ type ToolsPanel struct {
 	// Memory says whether memory works in this chat and, when it does not,
 	// which level turned it off and where to turn it on.
 	Memory MemoryReason
+	// ToolCap is set when the add-on tool cap left tools out, and nil when
+	// nothing is cut. Switching add-ons off for one chat does not bring them
+	// back: the cap applies before the chat's switches.
+	ToolCap *ToolCap
 }
 
 // Tools lists what a chat can use, with its switches.
@@ -145,7 +151,7 @@ func (s *Service) toolsFor(ctx context.Context, user string, rec session.ChatRec
 			return ToolsPanel{}, err
 		}
 	}
-	if p.Addons, err = s.addonsFor(ctx, user, rec); err != nil {
+	if p.Addons, p.ToolCap, err = s.addonsFor(ctx, user, rec, sc); err != nil {
 		return p, err
 	}
 	off := set(rec.McpOff)
@@ -194,15 +200,25 @@ func (s *Service) toolsFor(ctx context.Context, user string, rec session.ChatRec
 			byID[c.ID] = c
 		}
 		add := func(c mcpconns.Connector) {
-			sw := ConnectorSwitch{ID: c.ID, Name: c.Name, Off: off[mcpconns.Prefix+c.ID], Usable: c.Enabled}
+			sw := ConnectorSwitch{ID: c.ID, Name: c.Name, Off: off[mcpconns.Prefix+c.ID], Usable: c.Enabled, PluginInstall: c.PluginInstallID}
 			if !c.Enabled {
 				sw.Reason = "switched off on the Connectors page"
 			}
 			p.Connectors = append(p.Connectors, sw)
 		}
+		// A plugin's connector shows while its plugin contributes to the
+		// chat: on for the user, not switched off here, granted by the agent.
+		plugged := s.pluginConnectorInstalls(ctx, principal(user), rec, sc, false)
+		for _, c := range mine {
+			if c.PluginInstallID != "" && plugged[c.PluginInstallID] {
+				add(c)
+			}
+		}
 		if sc == nil {
 			for _, c := range mine {
-				add(c)
+				if c.PluginInstallID == "" {
+					add(c)
+				}
 			}
 		} else {
 			for _, id := range grantedIDs {
@@ -231,14 +247,29 @@ func (s *Service) connectorTools(ctx context.Context, a workspace.Actor, rec ses
 		}
 		return nil, prefixed("MCP connector", refs)
 	}
-	if sc == nil {
+	// The connectors of the plugins that contribute to the chat come with
+	// the plugin: a chat with an agent gets them when the agent grants the
+	// plugin, without an entry in its MCP list.
+	plugged := s.pluginConnectorInstalls(ctx, a.Principal, rec, sc, true)
+	if sc == nil || len(plugged) > 0 {
 		mine, err := s.d.Connectors.List(ctx, a.Principal)
 		if err != nil {
 			s.log.Warn("studio: connectors unavailable", "chat", a.ChatID, "error", err)
-			return nil, nil
+			if sc == nil {
+				return nil, nil
+			}
 		}
 		for _, c := range mine {
-			if c.Enabled && !off[mcpconns.Prefix+c.ID] {
+			if !c.Enabled || off[mcpconns.Prefix+c.ID] {
+				continue
+			}
+			if c.PluginInstallID != "" {
+				if plugged[c.PluginInstallID] {
+					refs = append(refs, c.ID)
+				}
+				continue
+			}
+			if sc == nil {
 				refs = append(refs, c.ID)
 			}
 		}

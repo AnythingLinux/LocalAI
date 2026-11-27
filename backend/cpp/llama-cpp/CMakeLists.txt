@@ -138,6 +138,16 @@ if(LLAMA_GRPC_BUILD_TESTS)
     target_compile_features(thread_params_test PRIVATE cxx_std_17)
     add_test(NAME thread_params_test COMMAND thread_params_test)
 
+    add_executable(backend_sampling_test backend_sampling_test.cpp backend_sampling.h)
+    target_include_directories(backend_sampling_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(backend_sampling_test PRIVATE cxx_std_17)
+    add_test(NAME backend_sampling_test COMMAND backend_sampling_test)
+
+    add_executable(grammar_engine_test grammar_engine_test.cpp grammar_engine.h)
+    target_include_directories(grammar_engine_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(grammar_engine_test PRIVATE cxx_std_17)
+    add_test(NAME grammar_engine_test COMMAND grammar_engine_test)
+
     add_executable(moe_cache_option_test moe_cache_option_test.cpp moe_cache_option.h)
     target_include_directories(moe_cache_option_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(moe_cache_option_test PRIVATE cxx_std_17)
@@ -152,6 +162,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
     target_include_directories(parallel_params_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(parallel_params_test PRIVATE cxx_std_17)
     add_test(NAME parallel_params_test COMMAND parallel_params_test)
+
+    add_executable(serving_policy_test serving_policy_test.cpp serving_policy.h)
+    target_include_directories(serving_policy_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(serving_policy_test PRIVATE cxx_std_17)
+    add_test(NAME serving_policy_test COMMAND serving_policy_test)
 
     add_executable(slot_cache_test slot_cache_test.cpp slot_cache.h)
     target_include_directories(slot_cache_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

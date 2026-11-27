@@ -110,6 +110,18 @@ func (stubClient) UpgradeBackend(_ context.Context, _ string) (string, error) {
 	return "stub-upgrade-job", nil
 }
 
+func (stubClient) StartUpgradeRun(_ context.Context, _ localaitools.UpgradeRunStartRequest) (*localaitools.UpgradeRun, error) {
+	return &localaitools.UpgradeRun{ID: "stub-run"}, nil
+}
+
+func (stubClient) UpgradeRuns(_ context.Context, _ string) ([]localaitools.UpgradeRun, error) {
+	return nil, nil
+}
+
+func (stubClient) CancelUpgradeRun(_ context.Context, id, _ string) (*localaitools.UpgradeRun, error) {
+	return &localaitools.UpgradeRun{ID: id}, nil
+}
+
 func (stubClient) SystemInfo(_ context.Context) (*localaitools.SystemInfo, error) {
 	return &localaitools.SystemInfo{Version: "stub"}, nil
 }
@@ -135,6 +147,14 @@ func (stubClient) DeleteScheduling(_ context.Context, _ string) error {
 }
 
 func (stubClient) SetNodeVRAMBudget(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (stubClient) SetNodeLimits(_ context.Context, req localaitools.SetNodeLimitsRequest) (*localaitools.NodeLimits, error) {
+	return &localaitools.NodeLimits{NodeID: req.NodeID}, nil
+}
+
+func (stubClient) SetModelMemoryPolicy(_ context.Context, _ localaitools.ModelMemoryPolicy) error {
 	return nil
 }
 
@@ -325,6 +345,12 @@ func (stubClient) GetP2PRelayLimits(_ context.Context, _ string) (*localaitools.
 	return nil, nil
 }
 func (stubClient) SetP2PRelayLimits(_ context.Context, _ string, _ localaitools.SetP2PRelayLimitsRequest) (*localaitools.P2PRelayLimitsInfo, error) {
+	return nil, nil
+}
+func (stubClient) GetP2PUserPairing(_ context.Context) (*localaitools.P2PUserPairingInfo, error) {
+	return nil, nil
+}
+func (stubClient) SetP2PUserPairing(_ context.Context, _ localaitools.SetP2PUserPairingRequest) (*localaitools.P2PUserPairingInfo, error) {
 	return nil, nil
 }
 func (stubClient) RevokeP2PDevice(_ context.Context, _ string) error { return nil }

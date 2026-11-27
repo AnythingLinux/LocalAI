@@ -56,6 +56,7 @@ func NewServer(client LocalAIClient, opts Options) *mcp.Server {
 	registerAliasTools(srv, client, opts)
 	registerBackendTools(srv, client, opts)
 	registerModelUpdateTools(srv, client, opts)
+	registerUpgradeRunTools(srv, client, opts)
 	registerConfigTools(srv, client, opts)
 	registerSystemTools(srv, client, opts)
 	registerSchedulingTools(srv, client, opts)
@@ -71,6 +72,7 @@ func NewServer(client LocalAIClient, opts Options) *mcp.Server {
 	registerCarrierWeightTools(srv, client, opts)
 	registerP2PTools(srv, client, opts)
 	registerFederationTools(srv, client, opts)
+	registerPluginTools(srv, client, opts)
 
 	// The second group: inference for any user. Kept apart so a caller can
 	// register or filter the two groups separately.

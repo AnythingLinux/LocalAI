@@ -34,8 +34,11 @@ type Gate interface {
 //
 // An Allowlist is safe for concurrent use.
 type Allowlist struct {
-	mu            sync.RWMutex
-	peers         map[peer.ID]struct{}
+	mu    sync.RWMutex
+	peers map[peer.ID]struct{}
+	// dialers may connect but open no stream: the servers this host is a
+	// client of, which redial it after their own address changed.
+	dialers       map[peer.ID]struct{}
 	pairing       bool
 	pairingProtos map[protocol.ID]struct{}
 }
@@ -68,6 +71,24 @@ func (a *Allowlist) Disallow(p peer.ID) {
 	a.mu.Unlock()
 }
 
+// AllowConn admits p at connection level only: it may connect (so that a
+// server this host is a client of can redial it) but gets no stream.
+func (a *Allowlist) AllowConn(p peer.ID) {
+	a.mu.Lock()
+	if a.dialers == nil {
+		a.dialers = map[peer.ID]struct{}{}
+	}
+	a.dialers[p] = struct{}{}
+	a.mu.Unlock()
+}
+
+// DisallowConn undoes AllowConn.
+func (a *Allowlist) DisallowConn(p peer.ID) {
+	a.mu.Lock()
+	delete(a.dialers, p)
+	a.mu.Unlock()
+}
+
 // Allowed reports whether p is a paired peer.
 func (a *Allowlist) Allowed(p peer.ID) bool {
 	a.mu.RLock()
@@ -96,7 +117,8 @@ func (a *Allowlist) AdmitConn(p peer.ID) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	_, ok := a.peers[p]
-	return ok || a.pairing
+	_, d := a.dialers[p]
+	return ok || d || a.pairing
 }
 
 // AdmitStream admits every stream of a paired peer. An unpaired peer gets a
@@ -111,18 +133,34 @@ func (a *Allowlist) AdmitStream(p peer.ID, proto protocol.ID) bool {
 	return a.pairing && pairingProto
 }
 
-// connGater applies a Gate as the libp2p connection gater.
-type connGater struct{ gate Gate }
+// connGater applies a Gate as the libp2p connection gater. It also keeps
+// the host off hint relays outside a hole punch (see hintRelays).
+//
+// While a dial waits for a hole punch to a peer, the gater admits that
+// peer's inbound connections. The direct connection of a hole punch can
+// arrive as inbound: the peer may dial directly before it punches, the last
+// attempt switches roles, and a TCP simultaneous open may be accepted by the
+// listening socket. A host that only dials out has an empty Gate, which
+// would refuse that connection. The admission is at connection level only:
+// streams to the host's listeners still pass AdmitStream.
+type connGater struct {
+	gate  Gate
+	hints *hintRelays
+}
 
-func (connGater) InterceptPeerDial(peer.ID) bool               { return true }
-func (connGater) InterceptAddrDial(peer.ID, ma.Multiaddr) bool { return true }
-func (connGater) InterceptAccept(network.ConnMultiaddrs) bool  { return true }
+func (connGater) InterceptPeerDial(peer.ID) bool { return true }
+
+func (g connGater) InterceptAddrDial(p peer.ID, a ma.Multiaddr) bool {
+	return g.hints == nil || g.hints.allowDial(p, a)
+}
+
+func (connGater) InterceptAccept(network.ConnMultiaddrs) bool { return true }
 
 func (g connGater) InterceptSecured(d network.Direction, p peer.ID, _ network.ConnMultiaddrs) bool {
 	if d == network.DirOutbound {
 		return true
 	}
-	if !g.gate.AdmitConn(p) {
+	if !g.gate.AdmitConn(p) && (g.hints == nil || !g.hints.punchingFor(p)) {
 		xlog.Debug("p2p: refused inbound connection from an unknown peer", "peer", p.String())
 		return false
 	}

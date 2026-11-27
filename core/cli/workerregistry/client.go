@@ -6,10 +6,12 @@ package workerregistry
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,16 +24,88 @@ import (
 )
 
 // RegistrationClient talks to the frontend's /api/node/* endpoints.
+//
+// Registration is the one call that takes a join token or the shared
+// registration token. It returns the own credential of the node, and every
+// other call, and every later registration, presents that credential.
 type RegistrationClient struct {
-	FrontendURL       string
+	FrontendURL string
+	// RegistrationToken is the shared registration token of the deployment. It
+	// is sent in registration only.
 	RegistrationToken string
-	HTTPTimeout       time.Duration // used for registration calls; defaults to 10s
+	// JoinToken is a single-use token that an admin minted. It is sent in
+	// registration only, and only until the node holds its own credential.
+	JoinToken string
+	// Credential keeps the own credential of the node between runs, so that a
+	// restart needs no join token. Nil keeps it in memory only.
+	Credential  CredentialStore
+	HTTPTimeout time.Duration // used for registration calls; defaults to 10s
 	// HTTPClient, when set, carries every call instead of a client built from
 	// HTTPTimeout: a worker that joined over P2P reaches the frontend through
 	// the P2P layer, whatever host FrontendURL names.
 	HTTPClient *http.Client
 	client     *http.Client
 	clientOnce sync.Once
+
+	credMu      sync.Mutex
+	credLoaded  bool
+	nodeToken   string
+	workerToken string
+}
+
+// CredentialStore keeps the own credential of a node.
+type CredentialStore interface {
+	// Load returns the stored credential, or the empty string when there is none
+	// for this frontend and node name.
+	Load() (string, error)
+	// Save stores the credential.
+	Save(token string) error
+}
+
+// NodeToken returns the own credential of the node, loading it from the store on
+// first use. It is empty until the node has registered.
+func (c *RegistrationClient) NodeToken() string {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if !c.credLoaded {
+		c.credLoaded = true
+		if c.Credential != nil {
+			tok, err := c.Credential.Load()
+			if err != nil {
+				xlog.Warn("Could not read the stored node credential", "error", err)
+			}
+			c.nodeToken = tok
+		}
+	}
+	return c.nodeToken
+}
+
+// WorkerToken returns the data plane token that the last registration handed
+// over, or empty. A worker that registered with the shared registration token
+// derives it from that token instead (workerctl.WorkerAuthToken).
+func (c *RegistrationClient) WorkerToken() string {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	return c.workerToken
+}
+
+func (c *RegistrationClient) adopt(res *RegisterResponse) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if res.WorkerToken != "" {
+		c.workerToken = res.WorkerToken
+	}
+	if res.NodeToken == "" {
+		return
+	}
+	c.credLoaded = true
+	c.nodeToken = res.NodeToken
+	if c.Credential != nil {
+		if err := c.Credential.Save(res.NodeToken); err != nil {
+			// The worker runs on, and needs a new join token after a restart.
+			xlog.Error("Could not store the node credential: a restart will need a new join token", "error", err)
+		}
+	}
 }
 
 // httpTimeout returns the configured timeout or a sensible default.
@@ -59,10 +133,11 @@ func (c *RegistrationClient) baseURL() string {
 	return strings.TrimRight(c.FrontendURL, "/")
 }
 
-// setAuth adds an Authorization header when a token is configured.
+// setAuth adds the own credential of the node as the Authorization header. The
+// registration token is not a credential for any call but registration.
 func (c *RegistrationClient) setAuth(req *http.Request) {
-	if c.RegistrationToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.RegistrationToken)
+	if tok := c.NodeToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 }
 
@@ -91,6 +166,13 @@ type RegisterResponse struct {
 	APIToken     string `json:"api_token,omitempty"`
 	NatsJWT      string `json:"nats_jwt,omitempty"`
 	NatsUserSeed string `json:"nats_user_seed,omitempty"`
+	// NodeToken is the own credential of the node for the node routes
+	// (heartbeat, drain, deregister) and for registering again. It is sent once,
+	// to a registration that used a join token or the registration token.
+	NodeToken string `json:"node_token,omitempty"`
+	// WorkerToken is the bearer token between the frontends and this worker for
+	// the data plane. Empty when the deployment has none.
+	WorkerToken string `json:"worker_token,omitempty"`
 	// TunnelToken is the own credential of the node for the tunnel. It is sent
 	// once, and only to a registration that asks for the tunnel.
 	TunnelToken string `json:"tunnel_token,omitempty"`
@@ -107,6 +189,20 @@ type RegisterResponse struct {
 // Re-registration is idempotent: the frontend preserves the node row and mints
 // a fresh NATS JWT each call, so this doubles as the credential-refresh call.
 func (c *RegistrationClient) RegisterFull(ctx context.Context, body map[string]any) (*RegisterResponse, error) {
+	// What the worker holds goes in the request. The frontend tries the own
+	// credential first, then the join token, then the registration token, so a
+	// worker that restarts never spends a join token.
+	body = maps.Clone(body)
+	if body == nil {
+		body = map[string]any{}
+	}
+	delete(body, "token")
+	if c.RegistrationToken != "" {
+		body["token"] = c.RegistrationToken
+	}
+	if c.JoinToken != "" {
+		body["join_token"] = c.JoinToken
+	}
 	jsonBody, _ := json.Marshal(body)
 	url := c.baseURL() + "/api/node/register"
 
@@ -131,6 +227,7 @@ func (c *RegistrationClient) RegisterFull(ctx context.Context, body map[string]a
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
+	c.adopt(&result)
 	return &result, nil
 }
 
@@ -232,10 +329,26 @@ func (c *RegistrationClient) HeartbeatLoop(ctx context.Context, nodeID string, i
 
 // Drain sets the node to draining status via POST /api/node/:id/drain.
 func (c *RegistrationClient) Drain(ctx context.Context, nodeID string) error {
-	url := c.baseURL() + "/api/node/" + nodeID + "/drain"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	return c.postDrain(ctx, nodeID, nil)
+}
+
+// postDrain sends POST /api/node/:id/drain, with body as JSON when it is not
+// nil.
+func (c *RegistrationClient) postDrain(ctx context.Context, nodeID string, body any) error {
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encoding drain request: %w", err)
+		}
+		payload = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/api/node/"+nodeID+"/drain", payload)
 	if err != nil {
 		return fmt.Errorf("creating drain request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	c.setAuth(req)
 
@@ -243,7 +356,7 @@ func (c *RegistrationClient) Drain(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("drain failed with status %d", resp.StatusCode)
 	}
@@ -322,20 +435,51 @@ func (c *RegistrationClient) Deregister(ctx context.Context, nodeID string) erro
 	return nil
 }
 
-// GracefulDeregister performs drain -> wait -> deregister in sequence.
-// This is the standard shutdown sequence for backend workers.
+// Defaults of the graceful shutdown of a worker.
+const (
+	// DefaultShutdownRequestWait is how long a worker that shuts down waits
+	// for the requests in flight on its replicas.
+	DefaultShutdownRequestWait = 30 * time.Second
+	// DefaultShutdownTimeout bounds drain, wait and deregistration together.
+	DefaultShutdownTimeout = 60 * time.Second
+)
+
+// ShutdownOptions controls GracefulShutdown.
+type ShutdownOptions struct {
+	// LoadsEnded tells the frontend that the worker stopped every load it
+	// ran and their processes exited, so it releases their jobs at once.
+	LoadsEnded bool
+	// RequestWait bounds the wait for the requests in flight. Zero means
+	// DefaultShutdownRequestWait.
+	RequestWait time.Duration
+	// Timeout bounds the whole sequence. Zero means DefaultShutdownTimeout.
+	Timeout time.Duration
+}
+
+// GracefulDeregister performs drain -> wait -> deregister in sequence with
+// the default windows. This is the standard shutdown sequence for workers.
 func (c *RegistrationClient) GracefulDeregister(nodeID string) {
+	c.GracefulShutdown(nodeID, ShutdownOptions{})
+}
+
+// GracefulShutdown drains the node, waits for the requests in flight on its
+// replicas (up to RequestWait), and deregisters it. The drain keeps the
+// replicas routable while the frontend places replacements; the
+// deregistration removes them.
+func (c *RegistrationClient) GracefulShutdown(nodeID string, opts ShutdownOptions) {
 	if c.FrontendURL == "" || nodeID == "" {
 		return
 	}
+	wait := cmp.Or(opts.RequestWait, DefaultShutdownRequestWait)
+	total := cmp.Or(opts.Timeout, DefaultShutdownTimeout)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), total)
 	defer cancel()
 
-	if err := c.Drain(ctx, nodeID); err != nil {
+	if err := c.drainForShutdown(ctx, nodeID, opts.LoadsEnded); err != nil {
 		xlog.Warn("Failed to set drain status", "error", err)
 	} else {
-		c.WaitForDrain(ctx, nodeID, 30*time.Second)
+		c.WaitForDrain(ctx, nodeID, wait)
 	}
 
 	if err := c.Deregister(ctx, nodeID); err != nil {
@@ -343,6 +487,11 @@ func (c *RegistrationClient) GracefulDeregister(nodeID string) {
 	} else {
 		xlog.Info("Deregistered from frontend")
 	}
+}
+
+// drainForShutdown drains the node and says that the worker shuts down.
+func (c *RegistrationClient) drainForShutdown(ctx context.Context, nodeID string, loadsEnded bool) error {
+	return c.postDrain(ctx, nodeID, map[string]bool{"shutdown": true, "loads_ended": loadsEnded})
 }
 
 // SplitSync sends the split report of a node and returns the model-split

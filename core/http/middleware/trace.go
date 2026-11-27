@@ -20,6 +20,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/mudler/LocalAI/core/application"
 	"github.com/mudler/LocalAI/core/http/auth"
+	"github.com/mudler/LocalAI/core/privacy"
 	"github.com/mudler/LocalAI/core/schema"
 	"github.com/mudler/LocalAI/core/trace/tracepersist"
 	"github.com/mudler/xlog"
@@ -245,6 +246,10 @@ func TraceMiddleware(app *application.Application) echo.MiddlewareFunc {
 			if !app.ApplicationConfig().EnableTracing {
 				return next(c)
 			}
+			// A zero-retention request leaves no trace: it would hold the bodies.
+			if !privacy.Allows(c.Request().Context(), privacy.StoreTrace) {
+				return next(c)
+			}
 
 			// Biometric routes can carry vectors in either direction and JSON
 			// diarization carries base64 audio even without profile export.
@@ -252,6 +257,10 @@ func TraceMiddleware(app *application.Application) echo.MiddlewareFunc {
 			// including registration if tracing is installed globally later.
 			switch c.Path() {
 			case "/v1/audio/diarization", "/audio/diarization", "/v1/voice/register":
+				return next(c)
+			// A join token is a credential: the mint response holds it in plain
+			// text, and a worker sends a token in the body of its registration.
+			case "/api/cluster/join-tokens", "/api/node/register":
 				return next(c)
 			}
 

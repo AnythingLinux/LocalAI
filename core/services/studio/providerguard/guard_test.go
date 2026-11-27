@@ -64,14 +64,17 @@ const (
 
 var allowed = []entry{
 	{ui + "utils/agentPresets.js", "'memory'", "the switch group of the built-in memory in the agent presets"},
-	// The word mail in plain text: an example of what a run reads and the
-	// envelope glyph of an empty list. Neither names the Mail add-on.
+	// The word mail in plain text: an example of what a run reads. It does not
+	// name the Mail add-on.
 	{"core/services/studio/triggertools.go", "Mail from the last 24 hours", "an example of what a scheduled run reads"},
-	{ui + "components/users/InvitesPanel.jsx", `name="mail"`, "the envelope glyph of the empty invitations list"},
 
 	// Third-party services: the login, the release source, the token issuer.
 	{"core/cli/run.go", "GitHub OAuth App", "help of the GitHub OAuth login: GitHub the service, not the add-on"},
+	{"core/http/endpoints/studio/triggerhook.go", `github`, "the source of an event that carries the GitHub delivery header: the sender, not the add-on"},
+	{ui + "pages/AgentTaskDetails.jsx", `placeholder="github"`, "an example source of an event trigger: the sender, not the add-on"},
 	{"core/http/auth/models.go", `github`, "the id of the GitHub OAuth login provider"},
+	{"core/services/plugins/store/types.go", `github`, "the kind of a plugin marketplace hosted on GitHub: the service, not the add-on"},
+	{"core/services/plugins/fetch/fetch.go", `github`, "the kind of a plugin marketplace hosted on GitHub: the service, not the add-on"},
 	{ui + "pages/Login.jsx", "github", "the GitHub OAuth login button: the service, not the add-on"},
 	{ui + "pages/Login.jsx", "'GitHub'", "the GitHub OAuth login button: the service, not the add-on"},
 	{ui + "App.jsx", `name="github"`, "the GitHub glyph of the footer link to the project"},
@@ -84,6 +87,7 @@ var allowed = []entry{
 	{"core/services/routing/piipattern/builtins.go", "Slack token", "secret pattern: Slack issues the token"},
 	{"core/services/routing/piipattern/builtins.go", "JSON Web Token", "the name of a token format"},
 	{"pkg/addons/packaging/catalog.go", "GitHub owner/repository", "release signing: GitHub Actions is the build system"},
+	{"pkg/addons/packaging/published.go", "GitHub owner/repository", "release signing: GitHub Actions is the build system"},
 	{"pkg/addons/packaging/catalog.go", "GitHub Actions OIDC issuer", "release signing: GitHub Actions is the build system"},
 	{"pkg/addons/packaging/channel.go", "GitHub event name", "release tooling: GitHub Actions is the build system"},
 	{"pkg/addons/packaging/registry.go", "GitHub event name", "release tooling: GitHub Actions is the build system"},
@@ -144,6 +148,8 @@ var allowed = []entry{
 	{"docs/content/administration/reverse-proxy-tls.md", "Web UI", "the web UI of LocalAI"},
 	{"docs/content/administration/troubleshooting.md", "Web UI", "the web UI of LocalAI"},
 	{"docs/content/administration/troubleshooting.md", "Web ", "the web UI of LocalAI"},
+	{"core/cli/run.go", "Web UI", "the web UI of LocalAI"},
+	{"docs/content/reference/cli-reference.md", "Web UI", "the web UI of LocalAI"},
 }
 
 var knownDebt = []debt{}

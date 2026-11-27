@@ -27,6 +27,7 @@ import (
 	"github.com/mudler/LocalAI/core/schema"
 	"github.com/mudler/LocalAI/core/services/galleryop"
 	"github.com/mudler/LocalAI/core/services/nodes"
+	"github.com/mudler/LocalAI/pkg/enginesettings/builtin"
 	"github.com/mudler/LocalAI/pkg/model"
 	"github.com/mudler/LocalAI/pkg/vram"
 	"github.com/mudler/LocalAI/pkg/xsysinfo"
@@ -198,6 +199,9 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 
 			// An add-on install of the install queue: its key names the add-on.
 			addonID, isAddon := galleryop.ParseAddonOpKey(galleryID)
+			// A plugin install or update: its key names the plugin
+			// (name@marketplace).
+			pluginID, isPlugin := galleryop.ParsePluginOpKey(galleryID)
 
 			// Determine if it's a model or backend
 			// First check if it was explicitly marked as a backend operation
@@ -207,7 +211,7 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 			// backend-vs-model, and a GPU-only backend installed on a worker is
 			// still a backend op even when this host cannot run it. The
 			// capability-filtered listing misclassified those as model ops.
-			if !isBackend && !isAddon {
+			if !isBackend && !isAddon && !isPlugin {
 				backends, _ := gallery.AvailableBackendsUnfiltered(appConfig.BackendGalleries, appConfig.SystemState)
 				for _, b := range backends {
 					backendID := fmt.Sprintf("%s@%s", b.Gallery.Name, b.Name)
@@ -233,6 +237,8 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 			displayName := galleryID
 			if isAddon {
 				displayName = addonID
+			} else if isPlugin {
+				displayName = pluginID
 			} else if strings.Contains(galleryID, "@") {
 				parts := strings.Split(galleryID, "@")
 				if len(parts) > 1 {
@@ -255,6 +261,7 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 				"isDeletion":  isDeletion,
 				"isBackend":   isBackend,
 				"isAddon":     isAddon,
+				"isPlugin":    isPlugin,
 				"isQueued":    isQueued,
 				"cancellable": isCancellable,
 				"message":     message,
@@ -279,6 +286,15 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 				if isAddon && galleryop.IsAddonAttention(status.Error) {
 					// The install waits for a new review of its host access.
 					opData["needsApproval"] = true
+				}
+				// A backend upgrade that put the previous build back, with
+				// its code: the Updates page says "Rolled back", as the row
+				// of the run that ran it does.
+				if status.RolledBack {
+					opData["rolledBack"] = true
+				}
+				if status.ErrorKey != "" {
+					opData["errorKey"] = status.ErrorKey
 				}
 			}
 			// Expose the per-node breakdown when the Phase 4 progress sink
@@ -353,11 +369,19 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 				if err != nil {
 					xlog.Warn("Failed to list durable model load jobs", "error", err)
 				} else {
+					shownJobs := map[string]*nodes.ModelLoadJob{}
 					for i := range jobs {
 						job := &jobs[i]
 						if job.State != nodes.LoadJobStateStaging {
 							continue
 						}
+						// A model can stage onto several nodes at once, one
+						// job per node. Show the one furthest along, so the
+						// operation keeps its one-per-model shape.
+						if prev, ok := shownJobs[job.TrackingKey]; ok && prev.Progress() >= job.Progress() {
+							continue
+						}
+						shownJobs[job.TrackingKey] = job
 						op := map[string]any{
 							"id":           "staging:" + job.TrackingKey,
 							"name":         job.TrackingKey,
@@ -1291,6 +1315,17 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 	// VRAM estimation endpoint
 	app.POST("/api/models/vram-estimate", localai.VRAMEstimateEndpoint(cl, appConfig), adminMiddleware)
 
+	// Engine runtime settings: the engines and the flag tables the model
+	// editor renders from, paste-a-command parsing and the command preview.
+	// Pure text handling over a static registry, so every frontend answers the
+	// same.
+	engines := builtin.Registry()
+	app.GET("/api/engines", localai.EngineListEndpoint(engines), adminMiddleware)
+	app.GET("/api/engines/:engine/settings-schema", localai.EngineSettingsSchemaEndpoint(engines), adminMiddleware)
+	app.POST("/api/engines/:engine/parse-command", localai.EngineParseCommandEndpoint(engines), adminMiddleware)
+	app.POST("/api/engines/:engine/command-preview", localai.EngineCommandPreviewEndpoint(engines), adminMiddleware)
+	app.POST("/api/engines/:engine/placement", localai.EnginePlacementEndpoint(engines), adminMiddleware)
+
 	// On-disk storage report: per-model sizes, shared files, missing refs
 	app.GET("/api/models/storage", localai.ModelStorageEndpoint(appConfig), adminMiddleware)
 
@@ -1824,13 +1859,29 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 	app.GET("/api/backends/updates", localai.BackendUpdatesEndpoint(updates), adminMiddleware)
 	app.POST("/api/backends/updates/check", localai.CheckBackendUpdatesEndpoint(updates), adminMiddleware)
 
-	app.POST("/api/backends/upgrade/:name", func(c echo.Context) error {
+	// Refuses an upgrade that cannot run before it is queued. A nil checker
+	// (no application) leaves only the installed check.
+	var upgradeChecker localai.UpgradeInfoProvider
+	if applicationInstance != nil {
+		upgradeChecker = applicationInstance.UpgradeChecker()
+	}
+	upgradeGuard := localai.NewBackendUpgradeGuard(galleryService, upgradeChecker)
+
+	app.POST("/api/backends/upgrade/:name", localai.BackendUpgradeViaRun(UpgradeRunDepsFor(applicationInstance), upgradeGuard, func(c echo.Context) error {
 		backendName := c.Param("name")
 		backendName, err := url.QueryUnescape(backendName)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{
 				"error": "invalid backend name",
 			})
+		}
+
+		expectedTo, err := localai.ExpectedToOf(c)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		}
+		if refusal := upgradeGuard.Check(c.Request().Context(), backendName, "", expectedTo); refusal != nil {
+			return refusal.Write(c)
 		}
 
 		id, err := uuid.NewUUID()
@@ -1864,7 +1915,7 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 			"statusUrl": fmt.Sprintf("/api/backends/job/%s", uid),
 			"message":   "Backend upgrade started",
 		})
-	}, adminMiddleware, middleware.RequireBackendInstallEnabled(appConfig))
+	}, localai.UIBackendUpgradeAnswer), adminMiddleware, middleware.RequireBackendInstallEnabled(appConfig))
 
 	// Resources API endpoint - unified memory info (GPU if available, otherwise RAM)
 	app.GET("/api/resources", func(c echo.Context) error {
@@ -1889,6 +1940,10 @@ func RegisterUIAPIRoutes(app *echo.Echo, cl *config.ModelConfigLoader, ml *model
 			"reclaimer_threshold": appConfig.MemoryReclaimerThreshold,
 			"watchdog_interval":   watchdogInterval,
 		}
+		// How the GPU reaches its memory (unified, discrete or none), for the
+		// memory-aware quick setup of the model editor. It describes this
+		// host; in distributed mode the models run on the workers.
+		response["memory"] = xsysinfo.HostMemoryOf(resourceInfo.GPUs)
 
 		// The same host readings a distributed worker reports in its
 		// heartbeat, so a single-node install can draw the CPU and models-disk

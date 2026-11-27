@@ -11,7 +11,7 @@ Run chats on a server. Grant chat features to users, switch parts off, choose wh
 ## Permissions
 
 With authentication on, an administrator grants features to each user in
-**Settings → Users and keys**. Plain chats are on by default. The parts that run
+**Administration → Access → Users**. Plain chats are on by default. The parts that run
 without a person, or reach the outside world, are off by default for a user, and an
 administrator always has all of them:
 
@@ -19,7 +19,7 @@ administrator always has all of them:
 |---|---|---|
 | `chats` | on | Chats, files, skills, your MCP connectors. A chat needs no more. The notification center does not need it: see [Inbox]({{% relref "/features/chats-and-agents/chats-agents#inbox" %}}). |
 | `agents` | off | Saved agents (`/api/chats/agents`) and starting a chat with one. |
-| `triggers` | off | Scheduled and file triggers (`/api/chats/triggers`): runs that start by themselves. |
+| `triggers` | off | Scheduled, file and event triggers (`/api/chats/triggers`): runs that start by themselves. The hook route of an event trigger needs no login: its own secret authenticates it (see [Event triggers]({{% relref "/features/chats-and-agents/chats-event-triggers" %}})). |
 | `connectors` | off | Telegram and Slack bindings (`/api/chats/connectors`): a public door to one of your agents. |
 | `mcp_jobs` | off | The agent tasks and jobs API (`/api/agent/...`). |
 | `pages` | off | The pages of the workspace (`/api/chats/pages...`): HTML pages in `pages/` of the home, shown in a sandboxed frame. See [Pages]({{%relref "/features/pages-and-home/pages" %}}). |
