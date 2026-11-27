@@ -1155,8 +1155,8 @@
       "connects": "Se connecte à {{host}}",
       "connectsTitle": "Un serveur MCP distant de ce plugin se connecte à {{host}}.",
       "runsCode": "Exécute du code",
-      "sandbox": "Nécessite la Sandbox",
-      "sandboxTitle": "Son code s'exécute uniquement dans la Sandbox d'un chat, jamais sur l'hôte.",
+      "sandbox": "Nécessite un bac à sable isolé",
+      "sandboxTitle": "Son code s'exécute uniquement dans le bac à sable isolé du chat, jamais sur l'hôte.",
       "unchecked": "Pas encore vérifié",
       "uncheckedTitle": "LocalAI vérifie les fichiers quand quelqu’un examine ou installe ce plugin. Il indique alors si le plugin exécute du code.",
       "noCode": "Sans code",
@@ -1207,8 +1207,8 @@
       "skipped": "Non pris en charge",
       "code": "Fichiers de code",
       "codeTitle": "Ce plugin exécute du code",
-      "codeBody": "Le code s'exécute uniquement dans la Sandbox d'un chat qui utilise le plugin, jamais sur l'hôte.",
-      "read": "J'ai lu les fichiers de code et j'accepte que ce code s'exécute dans la Sandbox de chaque chat qui utilise le plugin.",
+      "codeBody": "Le code s'exécute uniquement dans le bac à sable isolé d'un chat qui utilise le plugin, jamais sur l'hôte.",
+      "read": "J'ai lu les fichiers de code et j'accepte que ce code s'exécute dans le bac à sable de chaque chat qui utilise le plugin.",
       "fileFailed": "Impossible de charger ce fichier : {{error}}",
       "scope": "Installer pour",
       "scopeOnly": {
@@ -1231,7 +1231,9 @@
       "scope": "Installé pour",
       "installedBy": "Installé par",
       "approvedBy": "Approuvé par",
-      "updateTo": "Mise à jour disponible"
+      "updateTo": "Mise à jour disponible",
+      "versionValue": "Version {{version}}",
+      "more": "Détails du paquet"
     },
     "components": {
       "skills": "Skills",
@@ -1282,11 +1284,11 @@
         "blocked": "Mise à jour bloquée",
         "needsReenable": "Désactivé"
       },
-      "reenableTitle": "Ce plugin exécute désormais du code dans votre Sandbox",
+      "reenableTitle": "Ce plugin exécute désormais du code dans le bac à sable de vos chats",
       "reenableBody": "Une mise à jour y a ajouté du code. Il reste donc désactivé dans vos chats jusqu'à ce que vous le réactiviez.",
       "reenable": "Réactiver",
       "reenableConfirmTitle": "Réactiver {{name}} ?",
-      "reenableConfirm": "Ce plugin exécute désormais du code dans votre Sandbox. Ne l'activez que si vous acceptez ce code dans vos chats.",
+      "reenableConfirm": "Ce plugin exécute désormais du code dans le bac à sable de vos chats. Activez-le seulement si vous acceptez ce code dans vos chats.",
       "removeTitle": "Supprimer {{name}} ?",
       "removeEveryone": "Le plugin est supprimé pour tout le monde, avec l'interrupteur de chaque personne et les connecteurs qu'il a créés. Les fichiers qu'il a écrits dans les dossiers personnels restent.",
       "removeMine": "Le plugin et les connecteurs qu'il a créés sont supprimés. Les fichiers qu'il a écrits dans votre dossier personnel restent.",
@@ -1315,8 +1317,6 @@
       "checking": "Récupération de la nouvelle version et comparaison des fichiers…",
       "failed": "Impossible de préparer cette mise à jour.",
       "confirm": "Mettre à jour",
-      "from": "De",
-      "to": "Vers",
       "gainsCode": "La nouvelle version exécute du code",
       "gainsCodeBody": "Après la mise à jour, le plugin est désactivé pour chaque personne jusqu'à ce qu'elle le réactive.",
       "files_one": "{{count}} fichier modifié",
@@ -1336,7 +1336,7 @@
       "newCodeFiles": "Fichiers qui deviennent du code",
       "newCodeFilesBody": "Ces fichiers n'ont pas changé, mais la nouvelle version les exécute. Lisez chacun en entier.",
       "codeItems": "Code ajouté par la nouvelle version",
-      "codeItemsBody": "Hooks, serveurs et programmes qui s'exécutent dans le Sandbox. Certains viennent de l'entrée du marketplace et ne sont dans aucun fichier.",
+      "codeItemsBody": "Hooks, serveurs et programmes qui s'exécutent dans le bac à sable du chat. Certains viennent de l'entrée de la marketplace et ne sont dans aucun fichier.",
       "reviewedItems": "J'ai vérifié le code ajouté par la nouvelle version"
     },
     "marketplaces": {

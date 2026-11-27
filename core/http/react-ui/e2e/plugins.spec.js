@@ -24,7 +24,7 @@ test.describe('Plugins tab', () => {
     await expect(notes.getByTestId('plugin-runs-code')).toHaveCount(0)
     await expect(cards.filter({ hasText: 'docs-helper' }).getByTestId('plugin-no-code')).toHaveText('No code')
     await expect(lint.getByTestId('plugin-runs-code')).toHaveText('Runs code')
-    await expect(lint.getByTestId('plugin-needs-sandbox')).toHaveText('Needs Sandbox')
+    await expect(lint.getByTestId('plugin-needs-sandbox')).toHaveText('Needs an isolated sandbox')
     await expect(cards.filter({ hasText: 'docs-helper' })).toContainText('Curated by LocalAI')
     await expect(cards.filter({ hasText: 'npm-thing' }).getByTestId('plugin-unsupported')).toHaveText('npm sources are not supported')
     // The filter hides the plugin known to run code; an unchecked one stays.
@@ -67,8 +67,11 @@ test.describe('Plugins tab', () => {
     await expect(dialog.getByTestId('plugin-adds')).toContainText('Connects to docs.example.com')
     await expect(dialog.getByTestId('plugin-components')).toContainText('/docs-helper:outline')
     await expect(dialog.getByTestId('plugin-review-code')).toHaveCount(0)
-    // The digest, one long word, wraps inside the dialog.
+    // The digest, one long word, sits under Package details and wraps
+    // inside the dialog.
+    await dialog.getByTestId('plugin-review-facts-more').locator('summary').click()
     const digest = dialog.getByTestId('plugin-digest')
+    await expect(digest).toBeVisible()
     await expect(digest).toContainText('sha256:')
     const over = await dialog.evaluate((el) => {
       const d = el.querySelector('[data-testid="plugin-digest"]').getBoundingClientRect()
@@ -118,10 +121,10 @@ test.describe('Plugins tab', () => {
     const api = await stub(page, { installs: INSTALLED.map((i) => ({ ...i })) })
     await page.goto('/app/addons?tab=plugins&view=installed')
     const row = page.getByTestId('plugin-row').filter({ hasText: 'lint-hooks' })
-    await expect(row.getByTestId('plugin-row-reenable')).toContainText('This plugin now runs code in your Sandbox')
+    await expect(row.getByTestId('plugin-row-reenable')).toContainText("This plugin now runs code in your chats' sandbox")
     await row.getByTestId('plugin-row-switch').click()
     const confirm = page.getByRole('alertdialog')
-    await expect(confirm).toContainText('This plugin now runs code in your Sandbox.')
+    await expect(confirm).toContainText('This plugin now runs code in the sandbox of your chats.')
     await confirm.getByRole('button', { name: 'Turn on again' }).click()
     await expect.poll(() => api.mePuts.length).toBe(2)
     expect(api.mePuts).toEqual([{ enabled: true }, { enabled: true, reenable: true }])
